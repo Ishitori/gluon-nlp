@@ -16,21 +16,24 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import os
-
+from mxnet import init, nd
 from mxnet.gluon.data import DataLoader, SimpleDataset
 
+import gluonnlp as nlp
 from gluonnlp.data import SQuAD
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
+from scripts.question_answering.question_answering import BiDAFEmbedding
 
 question_max_length = 30
-context_max_length = 256
+context_max_length = 400
+max_chars_per_word = 16
 
 
 def test_transform_to_nd_array():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)
-    transformer = SQuADTransform(vocab_provider, question_max_length, context_max_length)
+    transformer = SQuADTransform(vocab_provider, question_max_length,
+                                 context_max_length, max_chars_per_word)
     record = dataset[0]
 
     transformed_record = transformer(*record)
@@ -41,7 +44,8 @@ def test_transform_to_nd_array():
 def test_data_loader_able_to_read():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)
-    transformer = SQuADTransform(vocab_provider, question_max_length, context_max_length)
+    transformer = SQuADTransform(vocab_provider, question_max_length,
+                                 context_max_length, max_chars_per_word)
     record = dataset[0]
 
     processed_dataset = SimpleDataset([transformer(*record)])
@@ -65,3 +69,36 @@ def test_load_vocabs():
 
     assert vocab_provider.get_word_level_vocab() is not None
     assert vocab_provider.get_char_level_vocab() is not None
+
+
+def test_bidaf_embedding():
+    batch_size = 5
+
+    dataset = SQuAD(segment='dev', root='tests/data/squad')
+    vocab_provider = VocabProvider(dataset)
+    transformer = SQuADTransform(vocab_provider, question_max_length,
+                                 context_max_length, max_chars_per_word)
+
+    # for performance reason, process only batch_size # of records
+    processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
+                                       if i < batch_size])
+
+    # need to remove question id before feeding the data to data loader
+    loadable_data = SimpleDataset([(r[0], r[2], r[3], r[4], r[5], r[6]) for r in processed_dataset])
+    dataloader = DataLoader(loadable_data, batch_size=5)
+
+    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
+    char_vocab = vocab_provider.get_char_level_vocab()
+
+    embedding = BiDAFEmbedding(word_vocab=word_vocab, char_vocab=char_vocab)
+    embedding.initialize(init.Xavier(magnitude=2.24))
+
+    contextual_embedding_h0 = nd.random.uniform(shape=(4, batch_size, 100))
+    contextual_embedding_c0 = nd.random.uniform(shape=(4, batch_size, 100))
+
+    for i, data in enumerate(dataloader):
+        # passing only question_words_nd and question_chars_nd batch
+        out = embedding([data[1], data[3]], [contextual_embedding_h0, contextual_embedding_c0])
+        assert out is not None
+        break
