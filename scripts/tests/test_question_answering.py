@@ -18,13 +18,16 @@
 # under the License.
 import os
 
+from mxnet import init, nd
 from mxnet.gluon.data import DataLoader, SimpleDataset
 
 from gluonnlp.data import SQuAD
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
+from scripts.question_answering.question_answering import BiDAFModelingLayer
 
 question_max_length = 30
-context_max_length = 256
+context_max_length = 400
+embedding_size = 100
 
 
 def test_transform_to_nd_array():
@@ -65,3 +68,22 @@ def test_load_vocabs():
 
     assert vocab_provider.get_word_level_vocab() is not None
     assert vocab_provider.get_char_level_vocab() is not None
+
+
+def test_modeling_layer():
+    batch_size = 5
+
+    # The modeling layer receive input in a shape of batch_size x T x 8d
+    # T is the sequence length of context which is context_max_length
+    # d is the size of embedding, which is embedding_size
+    fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 8 * embedding_size))
+    # We assume that attention is already return data in TNC format
+    attention_output = nd.transpose(fake_data, axes=(1, 0, 2))
+
+    layer = BiDAFModelingLayer()
+    # The model doesn't need to know the hidden states, so I don't hold variables for the states
+    layer.initialize(init.Xavier(magnitude=2.24))
+
+    output = layer(attention_output)
+    # According to the paper, the output should be 2d x T
+    assert output.shape == (context_max_length, batch_size, 2 * embedding_size)
