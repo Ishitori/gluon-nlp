@@ -18,13 +18,16 @@
 # under the License.
 import os
 
+from mxnet import init, nd
 from mxnet.gluon.data import DataLoader, SimpleDataset
 
 from gluonnlp.data import SQuAD
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
+from scripts.question_answering.question_answering import BiDAFOutputLayer
 
 question_max_length = 30
-context_max_length = 256
+context_max_length = 400
+embedding_size = 100
 
 
 def test_transform_to_nd_array():
@@ -65,3 +68,24 @@ def test_load_vocabs():
 
     assert vocab_provider.get_word_level_vocab() is not None
     assert vocab_provider.get_char_level_vocab() is not None
+
+
+def test_output_layer():
+    batch_size = 5
+
+    # The output layer receive 2 inputs: the output of Modeling layer (context_max_length,
+    # batch_size, 2 * embedding_size) and the output of Attention flow layer
+    # (batch_size, context_max_length, 8 * embedding_size)
+
+    # The modeling layer returns data in TNC format
+    modeling_output = nd.random.uniform(shape=(context_max_length, batch_size, 2 * embedding_size))
+    # The layer assumes that attention is already return data in TNC format
+    attention_output = nd.random.uniform(shape=(context_max_length, batch_size, 8 * embedding_size))
+
+    layer = BiDAFOutputLayer()
+    # The model doesn't need to know the hidden states, so I don't hold variables for the states
+    layer.initialize(init.Xavier(magnitude=2.24))
+
+    output = layer(attention_output, modeling_output)
+    # We expect final numbers as batch_size x 2 (first start index, second end index)
+    assert output.shape == (batch_size, 2)
