@@ -84,7 +84,7 @@ def test_output_layer():
 
     layer = BiDAFOutputLayer()
     # The model doesn't need to know the hidden states, so I don't hold variables for the states
-    layer.initialize(init.Xavier(magnitude=2.24))
+    layer.initialize()
 
     output = layer(attention_output, modeling_output)
     # We expect final numbers as batch_size x 2 (first start index, second end index)

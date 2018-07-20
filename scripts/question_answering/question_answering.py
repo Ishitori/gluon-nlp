@@ -27,12 +27,45 @@ from mxnet.gluon.rnn import LSTM
 
 
 class BiDAFOutputLayer(Block):
-    def __init__(self, prefix=None, params=None):
+    """
+    ``BiDAFOutputLayer`` produces the final prediction of an answer. The output is a tuple of
+    start index and end index of the answer in the paragraph per each batch.
+
+    It accepts 2 inputs:
+        `x` : the output of Attention layer of shape:
+        seq_max_length x batch_size x 8 * span_start_input_dim
+
+        `m` : the output of Modeling layer of shape:
+         seq_max_length x batch_size x 2 * span_start_input_dim
+
+    Parameters
+    ----------
+    span_start_input_dim : `int`, default 100
+        The number of features in the hidden state h of LSTM
+    units : `int`, default 10 * ``span_start_input_dim``
+        Number of hidden units of `Dense` layer
+    nlayers : `int`, default 1
+        Number of recurrent layers.
+    biflag: `bool`, default True
+        If `True`, becomes a bidirectional RNN.
+    dropout: `float`, default 0
+        If non-zero, introduces a dropout layer on the outputs of each
+        RNN layer except the last layer.
+    prefix : `str` or None
+        Prefix of this `Block`.
+    params : `ParameterDict` or `None`
+        Shared Parameters for this `Block`.
+    """
+    def __init__(self, span_start_input_dim=100, units=None, nlayers=1, biflag=True,
+                 dropout=0.2, prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
-        self._start_index_dense = nn.Dense(units=10 * 100)
-        self._end_index_lstm = LSTM(hidden_size=100, num_layers=2, bidirectional=True)
-        self._end_index_dense = nn.Dense(units=10 * 100)
+        units = 10 * span_start_input_dim if units is None else units
+
+        self._start_index_dense = nn.Dense(units=units)
+        self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
+                                    num_layers=nlayers, dropout=dropout, bidirectional=biflag)
+        self._end_index_dense = nn.Dense(units=units)
 
     def forward(self, x, m):  # pylint: disable=arguments-differ
         # setting batch size as the first dimension
