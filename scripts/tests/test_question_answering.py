@@ -82,7 +82,7 @@ def test_modeling_layer():
 
     layer = BiDAFModelingLayer()
     # The model doesn't need to know the hidden states, so I don't hold variables for the states
-    layer.initialize(init.Xavier(magnitude=2.24))
+    layer.initialize()
 
     output = layer(attention_output)
     # According to the paper, the output should be 2d x T
