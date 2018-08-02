@@ -203,8 +203,8 @@ def run_training(net, dataloader, options):
         # if multi-GPU, will also need to multiple by GPU qty
         avg_loss /= i
         epoch_time = time() - e_start
-        metrics = eval_metrics.get()
-        # TODO: Fix metrics, by using metric.py - original estimator
+        # TODO: Fix metrics by using metric.py - original estimator
+        # metrics = eval_metrics.get()
         # Again, in multi-gpu environment multiple i by GPU qty
         # avg_metrics = [metric / i for metric in metrics[1]]
         # epoch_metrics = (metrics[0], avg_metrics)
