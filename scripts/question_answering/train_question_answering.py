@@ -170,7 +170,7 @@ def run_training(net, dataloader, options):
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx)
 
-    for epoch_id in range(args.epochs):
+    for e in range(args.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
         eval_metrics.reset()  # reset metrics before each epoch
 
@@ -202,6 +202,9 @@ def run_training(net, dataloader, options):
         # i here would be equal to number of batches
         # if multi-GPU, will also need to multiple by GPU qty
         avg_loss /= i
+
+        # block the call here to get correct Time per epoch
+        avg_loss_scalar = avg_loss.asscalar()
         epoch_time = time() - e_start
         # TODO: Fix metrics by using metric.py - original estimator
         # metrics = eval_metrics.get()
@@ -211,7 +214,7 @@ def run_training(net, dataloader, options):
 
         print("\tEPOCH {:2}: train loss {:4.2f} | batch {:4} | lr {:5.3f} | "
               "Time per epoch {:5.2f} seconds"
-              .format(i, avg_loss.asscalar(), options.batch_size, trainer.learning_rate,
+              .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       epoch_time))
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
