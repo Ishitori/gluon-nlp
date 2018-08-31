@@ -16,6 +16,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import logging
+import pickle
 
 import argparse
 import numpy as np
@@ -23,7 +25,7 @@ import random
 from time import time
 
 import mxnet as mx
-from mxnet import init, autograd
+from mxnet import gluon, init, autograd
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
@@ -32,8 +34,9 @@ import gluonnlp as nlp
 from gluonnlp.data import SQuAD
 
 from scripts.question_answering.data_processing import VocabProvider, SQuADTransform
-from scripts.question_answering.metric import f1_score, exact_match_score
+from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
+from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.utils import logging_config
 
 np.random.seed(100)
@@ -41,32 +44,45 @@ random.seed(100)
 mx.random.seed(10000)
 
 
-def get_data(is_train, options):
-    """Get dataset and dataloader
+def transform_dataset(dataset, vocab_provider, options):
+    """Get transformed dataset
 
     Parameters
     ----------
-    is_train : `bool`
-        If `True`, training SQuAD dataset is loaded, if `False` valiidation dataset is loaded
+    dataset : `Dataset`
+        Original dataset
+    vocab_provider : `VocabularyProvider`
+        Vocabulary provider
     options : `Namespace`
         Data transformation arguments
 
     Returns
     -------
     data : Tuple
-        A tuple of dataset and dataloader
+        A tuple of dataset, QuestionIdMapper and original json data for evaluation
     """
-    dataset = SQuAD(segment='train' if is_train else 'val')
-    vocab_provider = VocabProvider(dataset)
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
                                  options.ctx_max_len, options.word_max_len)
-    # TODO: Data processing takes too long for doing experementation
-    # set it to 256 to speed up thing, but need to refactor this to maybe store processed dataset
-    # and vocabs. 256 is not a random number, it is 2 * batch_size, so the last batch won't cause
-    # Invalid recurrent state shape after first batch is finished
-    processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
-                                       if i < 256])
+    processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)])
+    return processed_dataset
 
+
+def get_record_per_answer_span(processed_dataset, options):
+    """Each record has multiple answers and for training purposes it is better to increase number of
+    records by creating a record per each answer.
+
+    Parameters
+    ----------
+    processed_dataset : `Dataset`
+        Transformed dataset, ready to be trained on
+    options : `Namespace`
+        Command arguments
+
+    Returns
+    -------
+    data : Tuple
+        A tuple of dataset and dataloader
+    """
     data_no_label = []
     labels = []
     global_index = 0
@@ -85,10 +101,10 @@ def get_data(is_train, options):
     dataloader = DataLoader(loadable_data, batch_size=options.batch_size, shuffle=True,
                             last_batch='discard')
 
-    return dataset, dataloader
+    return loadable_data, dataloader
 
 
-def get_vocabs(dataset, options):
+def get_vocabs(vocab_provider, options):
     """Get word-level and character-level vocabularies
 
     Parameters
@@ -103,8 +119,6 @@ def get_vocabs(dataset, options):
     data : Tuple
         A tuple of word vocabulary and character vocabulary
     """
-    vocab_provider = VocabProvider(dataset)
-
     word_vocab = vocab_provider.get_word_level_vocab()
 
     word_vocab.set_embedding(
@@ -120,20 +134,25 @@ def get_context(options):
     Parameters
     ----------
     options : `Namespace`
-        Training arguments
+        Command arguments
 
     """
+    ctx = []
+
     if options.gpu is None:
-        ctx = mx.cpu()
+        ctx.append(mx.cpu(0))
         print('Use CPU')
     else:
-        ctx = mx.gpu(options.gpu)
+        indices = options.gpu.split(',')
+
+        for index in indices:
+            ctx.append(mx.gpu(int(index)))
 
     return ctx
 
 
-def run_training(net, dataloader, options):
-    """Get word-level and character-level vocabularies
+def run_training(net, dataloader, evaluator, ctx, options):
+    """Main function to do training of the network
 
     Parameters
     ----------
@@ -141,38 +160,23 @@ def run_training(net, dataloader, options):
         Network to train
     dataloader : `DataLoader`
         Initialized dataloader
+    evaluator: `PerformanceEvaluator`
+        Used to plug in official evaluation script
+    ctx: `Context`
+        Training context
     options : `Namespace`
         Training arguments
-
-    Returns
-    -------
-    data : Tuple
-        A tuple of word vocabulary and character vocabulary
     """
-    ctx = get_context(options)
 
     trainer = Trainer(net.collect_params(), args.optimizer, {'learning_rate': options.lr})
-    eval_metrics = mx.metric.CompositeEvalMetric(metrics=[
-        mx.metric.create(lambda label, pred: f1_score(pred, label)),
-        mx.metric.create(lambda label, pred: exact_match_score(pred, label))
-    ])
     loss_function = SoftmaxCrossEntropyLoss()
 
-    contextual_embedding_param_shape = (4, options.batch_size, options.embedding_size)
-    ctx_initial_embedding_h0 = mx.nd.random.uniform(shape=contextual_embedding_param_shape, ctx=ctx)
-    ctx_initial_embedding_c0 = mx.nd.random.uniform(shape=contextual_embedding_param_shape, ctx=ctx)
-    q_initial_embedding_h0 = mx.nd.random.uniform(shape=contextual_embedding_param_shape, ctx=ctx)
-    q_initial_embedding_c0 = mx.nd.random.uniform(shape=contextual_embedding_param_shape, ctx=ctx)
-
-    ctx_embedding = [ctx_initial_embedding_h0, ctx_initial_embedding_c0]
-    q_embedding = [q_initial_embedding_h0, q_initial_embedding_c0]
-
     train_start = time()
-    avg_loss = mx.nd.zeros((1,), ctx=ctx)
+    avg_loss = mx.nd.zeros((1,), ctx=ctx[0])
+    print("Starting training...")
 
     for e in range(args.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
-        eval_metrics.reset()  # reset metrics before each epoch
 
         for i, (data, label) in enumerate(dataloader):
             # start timing for the first batch of epoch
@@ -180,48 +184,80 @@ def run_training(net, dataloader, options):
                 e_start = time()
 
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
-            q_words = q_words.as_in_context(ctx)
-            ctx_words = ctx_words.as_in_context(ctx)
-            q_chars = q_chars.as_in_context(ctx)
-            ctx_chars = ctx_chars.as_in_context(ctx)
-            label = label.as_in_context(ctx)
+            record_index = gluon.utils.split_and_load(record_index, ctx)
+            q_words = gluon.utils.split_and_load(q_words, ctx)
+            ctx_words = gluon.utils.split_and_load(ctx_words, ctx)
+            q_chars = gluon.utils.split_and_load(q_chars, ctx)
+            ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx)
+            label = gluon.utils.split_and_load(label, ctx)
 
-            with autograd.record():
-                output, ctx_embedding, q_embedding = net((record_index, q_words, ctx_words, q_chars,
-                                                          ctx_chars), ctx_embedding, q_embedding)
-                loss = loss_function(output, label)
+            # Wait for completion of previous iteration to avoid unnecessary memory allocation
+            mx.nd.waitall()
+            losses = []
 
-            loss.backward()
+            for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
+                                             q_chars, ctx_chars, label):
+                with autograd.record():
+                    o, _, _ = net((ri, qw, cw, qc, cc))
+                    loss = loss_function(o, l)
+                    losses.append(loss)
+
+            for l in losses:
+                l.backward()
+
             trainer.step(options.batch_size)
 
-            avg_loss += loss.mean().as_in_context(avg_loss.context)
+            for l in losses:
+                avg_loss += l.mean().as_in_context(avg_loss.context)
 
-            # TODO: Update eval metrics calculation with actual predictions
-            # eval_metrics.update(label, output)
+        eval_results = evaluator.evaluate_performance(net, ctx, options)
 
-        # i here would be equal to number of batches
-        # if multi-GPU, will also need to multiple by GPU qty
-        avg_loss /= i
+        avg_loss /= (i * len(ctx))
 
         # block the call here to get correct Time per epoch
         avg_loss_scalar = avg_loss.asscalar()
         epoch_time = time() - e_start
-        # TODO: Fix metrics by using metric.py - original estimator
-        # metrics = eval_metrics.get()
-        # Again, in multi-gpu environment multiple i by GPU qty
-        # avg_metrics = [metric / i for metric in metrics[1]]
-        # epoch_metrics = (metrics[0], avg_metrics)
 
         print("\tEPOCH {:2}: train loss {:4.2f} | batch {:4} | lr {:5.3f} | "
-              "Time per epoch {:5.2f} seconds"
+              "Time per epoch {:5.2f} seconds | {}"
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
-                      epoch_time))
+                      epoch_time, eval_results))
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
 
 
+def save_transformed_dataset(dataset, options):
+    """Save processed dataset into a file.
+
+    Parameters
+    ----------
+    dataset : `Dataset`
+        Dataset to save
+    options : `Namespace`
+        Saving arguments
+    """
+    pickle.dump(dataset, open(options.preprocessed_dataset_path, "wb"))
+
+
+def load_transformed_dataset(options):
+    """Loads already preprocessed dataset from disk
+
+    Parameters
+    ----------
+    options : `Namespace`
+        Loading arguments
+    """
+    processed_dataset = pickle.load(open(options.preprocessed_dataset_path, "rb"))
+    return processed_dataset
+
 def get_args():
+    """Get console arguments
+    """
     parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
+    parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
+    parser.add_argument('--train', type=bool, default=True, help='Run training')
+    parser.add_argument('--preprocessed_dataset_path', type=str,
+                        default="preprocessed_dataset.p", help='Path to preprocessed dataset')
     parser.add_argument('--epochs', type=int, default=40, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
                         help='Dimension of the word embedding')
@@ -250,8 +286,8 @@ def get_args():
                         help='report interval')
     parser.add_argument('--save_dir', type=str, default='out_dir',
                         help='directory path to save the final model and training log')
-    parser.add_argument('--gpu', type=int, default=None,
-                        help='id of the gpu to use. Set it to empty means to use cpu.')
+    parser.add_argument('--gpu', type=str, default=None,
+                        help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
 
     args = parser.parse_args()
     return args
@@ -262,10 +298,30 @@ if __name__ == "__main__":
     print(args)
     logging_config(args.save_dir)
 
-    train_dataset, train_dataloader = get_data(is_train=True, options=args)
-    word_vocab, char_vocab = get_vocabs(train_dataset, options=args)
+    if args.preprocess:
+        if not args.preprocessed_dataset_path:
+            logging.error("Preprocessed_data_path attribute is not provided")
+            exit(1)
 
-    net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
-    net.initialize(init.Xavier(magnitude=2.24))
+        dataset = SQuAD(segment='train')
+        vocab_provider = VocabProvider(dataset)
+        transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
+        save_transformed_dataset(transformed_dataset, args)
+        exit(0)
 
-    run_training(net, train_dataloader, args)
+    if args.train:
+        dataset = SQuAD(segment='train')
+        vocab_provider = VocabProvider(dataset)
+        mapper = QuestionIdMapper(dataset)
+        transformed_dataset = load_transformed_dataset(args) if args.preprocessed_dataset_path \
+            else transform_dataset(dataset, vocab_provider, options=args)
+
+        train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, args)
+        word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
+        ctx = get_context(args)
+
+        evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+        net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
+        net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
+
+        run_training(net, train_dataloader, evaluator, ctx, options=args)

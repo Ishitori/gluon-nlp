@@ -63,6 +63,7 @@ class BiDAFEmbedding(Block):
                                           bidirectional=True)
 
     def forward(self, x, contextual_embedding_state=None):  # pylint: disable=arguments-differ
+        batch_size = x[0].shape[0]
         # Changing shape from NTC to TNC as most MXNet blocks work with TNC format natively
         word_level_data = nd.transpose(x[0], axes=(1, 0))
         char_level_data = nd.transpose(x[1], axes=(1, 0, 2))
@@ -94,6 +95,11 @@ class BiDAFEmbedding(Block):
         highway_input = nd.concat(char_embedded, word_embedded, dim=2)
         # Pass through highway, shape remains unchanged
         highway_output = self._highway_network(highway_input)
+
+        # Create starting state if necessary
+        contextual_embedding_state = \
+            self._contextual_embedding.begin_state(batch_size, ctx=highway_output.context) \
+            if contextual_embedding_state is None else contextual_embedding_state
 
         # Pass through contextual embedding, which is just bi-LSTM
         ce_output, ce_state = self._contextual_embedding(highway_output,
@@ -190,7 +196,8 @@ class BiDAFOutputLayer(Block):
 
         end_index_dense_output = self._end_index_dense(end_index_input)
 
-        # TODO: Loss function applies softmax by default, so this code is commented here
+        # Don't need to apply softmax for training, but do need for prediction
+        # Maybe should use autograd properties to check it
         # Will need to reuse it to actually make predictions
         # start_index_softmax_output = start_index_dense_output.softmax(axis=1)
         # start_index = nd.argmax(start_index_softmax_output, axis=1)
@@ -231,7 +238,7 @@ class BiDAFModel(Block):
                                                   nlayers=options.output_num_layers,
                                                   dropout=options.dropout)
 
-    def forward(self, x, ctx_embedding_states, q_embedding_states, *args):
+    def forward(self, x, ctx_embedding_states=None, q_embedding_states=None, *args):
         ctx_embedding_output, ctx_embedding_state = self._ctx_embedding([x[2], x[4]],
                                                                         ctx_embedding_states)
         q_embedding_output, q_embedding_state = self._q_embedding([x[1], x[3]],

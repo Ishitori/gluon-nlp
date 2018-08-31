@@ -186,8 +186,8 @@ class VocabProvider(object):
         all_tokens = []
 
         for data_item in dataset:
-            all_tokens.extend(tokenization_fn(data_item[1]))
             all_tokens.extend(tokenization_fn(data_item[2]))
+            all_tokens.extend(tokenization_fn(data_item[3]))
 
         counter = data.count_tokens(all_tokens)
         vocab = Vocab(counter)
