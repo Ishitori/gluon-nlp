@@ -54,11 +54,11 @@ class PerformanceEvaluator:
 
         for i, data in enumerate(eval_dataloader):
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
-            record_index = gluon.utils.split_and_load(record_index, ctx)
-            q_words = gluon.utils.split_and_load(q_words, ctx)
-            ctx_words = gluon.utils.split_and_load(ctx_words, ctx)
-            q_chars = gluon.utils.split_and_load(q_chars, ctx)
-            ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx)
+            record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
+            q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
+            ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
+            q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
+            ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
 
             for ri, qw, cw, qc, cc in zip(record_index, q_words, ctx_words, q_chars, ctx_chars):
                 out, _, _ = net((ri, qw, cw, qc, cc))

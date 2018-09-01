@@ -16,6 +16,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import os
+
 import logging
 import pickle
 
@@ -184,12 +186,12 @@ def run_training(net, dataloader, evaluator, ctx, options):
                 e_start = time()
 
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
-            record_index = gluon.utils.split_and_load(record_index, ctx)
-            q_words = gluon.utils.split_and_load(q_words, ctx)
-            ctx_words = gluon.utils.split_and_load(ctx_words, ctx)
-            q_chars = gluon.utils.split_and_load(q_chars, ctx)
-            ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx)
-            label = gluon.utils.split_and_load(label, ctx)
+            record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
+            q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
+            ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
+            q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
+            ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
+            label = gluon.utils.split_and_load(label, ctx, even_split=False)
 
             # Wait for completion of previous iteration to avoid unnecessary memory allocation
             mx.nd.waitall()
@@ -223,7 +225,29 @@ def run_training(net, dataloader, evaluator, ctx, options):
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       epoch_time, eval_results))
 
+        save_model_parameters(e, options)
+
     print("Training time {:6.2f} seconds".format(time() - train_start))
+
+
+def save_model_parameters(net, epoch, options):
+    """Save parameters of the trained model
+
+    Parameters
+    ----------
+    net : `Block`
+        Model with trained parameters
+    epoch : `int`
+        Number of epoch
+    options : `Namespace`
+        Saving arguments
+    """
+
+    if not os.path.exists(options.save_dir):
+        os.mkdir(options.save_dir)
+
+    save_path = os.path.join(args.save_dir, 'epoch{:d}.params'.format(epoch))
+    net.save_parameters(save_path)
 
 
 def save_transformed_dataset(dataset, options):
