@@ -18,9 +18,7 @@
 # under the License.
 
 """BiDAF model blocks"""
-from mxnet.gluon.nn import HybridSequential
-
-from scripts.question_answering.attention_flow import AttentionFlow
+from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.similarity_function import DotProductSimilarity
 
 __all__ = ['BiDAFEmbedding', 'BiDAFModelingLayer', 'BiDAFOutputLayer', 'BiDAFModel']
@@ -218,6 +216,7 @@ class BiDAFModel(Block):
 
     def __init__(self, word_vocab, char_vocab, options, prefix=None, params=None):
         super().__init__(prefix=prefix, params=params)
+        self._options = options
 
         with self.name_scope():
             self._ctx_embedding = BiDAFEmbedding(word_vocab, char_vocab,
@@ -230,7 +229,7 @@ class BiDAFModel(Block):
                                                options.highway_num_layers,
                                                options.embedding_size,
                                                prefix="question_embedding")
-            self._attention_layer = AttentionFlow(DotProductSimilarity())
+            self._attention_layer = BidirectionalAttentionFlow(DotProductSimilarity())
             self._modeling_layer = BiDAFModelingLayer(input_dim=options.embedding_size,
                                                       nlayers=options.modeling_num_layers,
                                                       dropout=options.dropout)
@@ -244,7 +243,17 @@ class BiDAFModel(Block):
         q_embedding_output, q_embedding_state = self._q_embedding([x[1], x[3]],
                                                                   q_embedding_states)
 
-        attention_layer_output = self._attention_layer(ctx_embedding_output, q_embedding_output)
+        q_mask = x[1] != 0
+        ctx_mask = x[2] != 0
+
+        attention_layer_output = self._attention_layer(ctx_embedding_output,
+                                                       q_embedding_output,
+                                                       q_mask,
+                                                       ctx_mask,
+                                                       self._options.batch_size,
+                                                       self._options.ctx_max_len,
+                                                       self._options.embedding_size)
+
         modeling_layer_output = self._modeling_layer(attention_layer_output)
         output = self._output_layer(attention_layer_output, modeling_layer_output)
 
