@@ -101,7 +101,7 @@ def get_record_per_answer_span(processed_dataset, options):
 
     loadable_data = ArrayDataset(data_no_label, labels)
     dataloader = DataLoader(loadable_data, batch_size=options.batch_size, shuffle=True,
-                            last_batch='discard')
+                            last_batch='keep')
 
     return loadable_data, dataloader
 
@@ -246,7 +246,7 @@ def save_model_parameters(net, epoch, options):
     if not os.path.exists(options.save_dir):
         os.mkdir(options.save_dir)
 
-    save_path = os.path.join(args.save_dir, 'epoch{:d}.params'.format(epoch))
+    save_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(epoch))
     net.save_parameters(save_path)
 
 
@@ -273,6 +273,7 @@ def load_transformed_dataset(options):
     """
     processed_dataset = pickle.load(open(options.preprocessed_dataset_path, "rb"))
     return processed_dataset
+
 
 def get_args():
     """Get console arguments
