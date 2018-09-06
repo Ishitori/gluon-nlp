@@ -170,7 +170,8 @@ def run_training(net, dataloader, evaluator, ctx, options):
         Training arguments
     """
 
-    trainer = Trainer(net.collect_params(), args.optimizer, {'learning_rate': options.lr})
+    trainer = Trainer(net.collect_params(), args.optimizer,
+                      {'learning_rate': options.lr}, kvstore="local")
     loss_function = SoftmaxCrossEntropyLoss()
 
     train_start = time()
