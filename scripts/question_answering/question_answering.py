@@ -243,6 +243,11 @@ class BiDAFModel(Block):
         q_embedding_output, q_embedding_state = self._q_embedding([x[1], x[3]],
                                                                   q_embedding_states)
 
+        # attention layer expect batch_size x seq_length x channels
+        ctx_embedding_output = nd.transpose(ctx_embedding_output, axes=(1, 0, 2))
+        q_embedding_output = nd.transpose(q_embedding_output, axes=(1, 0, 2))
+
+        # Both masks can be None
         q_mask = x[1] != 0
         ctx_mask = x[2] != 0
 
@@ -254,6 +259,8 @@ class BiDAFModel(Block):
                                                        self._options.ctx_max_len,
                                                        self._options.embedding_size)
 
+        # modeling layer expects seq_length x batch_size x channels
+        attention_layer_output = nd.transpose(attention_layer_output, axes=(1, 0, 2))
         modeling_layer_output = self._modeling_layer(attention_layer_output)
         output = self._output_layer(attention_layer_output, modeling_layer_output)
 

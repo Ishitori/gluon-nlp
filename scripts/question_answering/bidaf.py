@@ -48,27 +48,29 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         # Shape: (batch_size, passage_length, question_length)
         passage_question_attention = last_dim_softmax(passage_question_similarity, question_mask)
         # Shape: (batch_size, passage_length, encoding_dim)
-        passage_question_vectors = weighted_sum(encoded_question, passage_question_attention)
+        passage_question_vectors = weighted_sum(F, encoded_question, passage_question_attention)
 
         # We replace masked values with something really negative here, so they don't affect the
         # max below.
-        masked_similarity = replace_masked_values(passage_question_similarity,
-                                                  question_mask.expand_dims(1),
-                                                  -1e7)
+        masked_similarity = passage_question_similarity if question_mask is None else \
+            replace_masked_values(passage_question_similarity,
+                                  question_mask.expand_dims(1),
+                                  -1e7)
         # Shape: (batch_size, passage_length)
-        question_passage_similarity = masked_similarity.max(axis=-1)[0]
+        question_passage_similarity = masked_similarity.max(axis=-1)
         # Shape: (batch_size, passage_length)
         question_passage_attention = masked_softmax(question_passage_similarity, passage_mask)
         # Shape: (batch_size, encoding_dim)
-        question_passage_vector = weighted_sum(encoded_passage, question_passage_attention)
+        question_passage_vector = weighted_sum(F, encoded_passage, question_passage_attention)
         # Shape: (batch_size, passage_length, encoding_dim)
-        tiled_question_passage_vector = question_passage_vector.expand_dims(1).expand(batch_size,
-                                                                                    passage_length,
-                                                                                    encoding_dim)
+        tiled_question_passage_vector = question_passage_vector.expand_dims(1)
 
         # Shape: (batch_size, passage_length, encoding_dim * 4)
-        final_merged_passage = F.cat([encoded_passage,
-                                      passage_question_vectors,
-                                      encoded_passage * passage_question_vectors,
-                                      encoded_passage * tiled_question_passage_vector],
-                                     dim=-1)
+        final_merged_passage = F.concat(encoded_passage,
+                                        passage_question_vectors,
+                                        encoded_passage * passage_question_vectors,
+                                        F.broadcast_mul(encoded_passage,
+                                                        tiled_question_passage_vector),
+                                        dim=-1)
+
+        return final_merged_passage

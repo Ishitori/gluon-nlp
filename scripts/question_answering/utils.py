@@ -216,9 +216,9 @@ def _last_dimension_applicator(function_to_apply,
     tensor_shape = tensor.shape
     reshaped_tensor = tensor.reshape(-1, tensor.shape[-1])
     if mask is not None:
-        while mask.shape[0] < tensor.shape[0]:
+        while len(mask.shape) < len(tensor.shape):
             mask = mask.expand_dims(1)
-        mask = mask.broadcast_to(tensor).contiguous().float()
+        mask = mask.broadcast_to(shape=tensor.shape)
         mask = mask.reshape(-1, mask.shape[-1])
     reshaped_result = function_to_apply(reshaped_tensor, mask)
     return reshaped_result.reshape(*tensor_shape)
@@ -242,7 +242,7 @@ def last_dim_log_softmax(tensor, mask):
     return _last_dimension_applicator(masked_log_softmax, tensor, mask)
 
 
-def weighted_sum(matrix, attention):
+def weighted_sum(F, matrix, attention):
     """
     Takes a matrix of vectors and a set of weights over the rows in the matrix (which we call an
     "attention" vector), and returns a weighted sum of the rows in the matrix.  This is the typical
@@ -266,13 +266,13 @@ def weighted_sum(matrix, attention):
     ``(batch_size, num_documents, num_queries, embedding_dim)`` respectively.
     """
 
-    if attention.shape[0] == 2 and matrix.shape[0] == 3:
-        return attention.expand_dims(1).batch_dot(matrix).squeeze(1)
-    if attention.shape[0] == 3 and matrix.shape[0] == 3:
-        return attention.batch_dot(matrix)
-    if matrix.shape[0] - 1 < attention.shape[0]:
+    if len(attention.shape) == 2 and len(matrix.shape) == 3:
+        return F.squeeze(F.batch_dot(attention.expand_dims(1), matrix), axis=1)
+    if len(attention.shape) == 3 and len(matrix.shape) == 3:
+        return F.batch_dot(attention, matrix)
+    if len(matrix.shape) - 1 < len(attention.shape):
         expanded_size = list(matrix.shape)
-        for i in range(attention.shape[0] - matrix.shape[0] + 1):
+        for i in range(len(attention.shape) - len(matrix.shape) + 1):
             matrix = matrix.expand_dims(1)
             expanded_size.insert(i + 1, attention.shape[i + 1])
         matrix = matrix.broadcast_to(*expanded_size)
