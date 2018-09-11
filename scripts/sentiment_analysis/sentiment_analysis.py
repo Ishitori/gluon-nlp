@@ -35,7 +35,7 @@ import numpy as np
 
 import mxnet as mx
 from mxnet import gluon, autograd
-from mxnet.gluon import Block, HybridBlock
+from mxnet.gluon import HybridBlock
 from mxnet.gluon.data import DataLoader
 
 import gluonnlp as nlp
@@ -49,17 +49,17 @@ length_clip = nlp.data.ClipSequence(500)
 
 
 parser = argparse.ArgumentParser(description='MXNet Sentiment Analysis Example on IMDB. '
-                                             'We load a LSTM model that is pretrained on '
+                                             'We load a LSTM model that is pre-trained on '
                                              'WikiText as our encoder.')
 parser.add_argument('--lm_model', type=str, default='standard_lstm_lm_200',
-                    help='type of the pretrained model to load, can be "standard_lstm_200", '
+                    help='type of the pre-trained model to load, can be "standard_lstm_200", '
                          '"standard_lstm_200", etc.')
 parser.add_argument('--use-mean-pool', type=bool, default=True,
                     help='whether to use mean pooling to aggregate the states from '
                          'different timestamps.')
 parser.add_argument('--no_pretrained', action='store_true',
                     help='Turn on the option to just use the structure and '
-                         'not load the pretrained weights.')
+                         'not load the pre-trained weights.')
 parser.add_argument('--lr', type=float, default=2.5E-3,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=None, help='gradient clipping')
@@ -118,7 +118,7 @@ class AggregationLayer(HybridBlock):
         return agg_state
 
 
-class SentimentNet(Block):
+class SentimentNet(HybridBlock):
     """Network for sentiment analysis."""
     def __init__(self, dropout, use_mean_pool=False, prefix=None, params=None):
         super(SentimentNet, self).__init__(prefix=prefix, params=params)
@@ -132,7 +132,7 @@ class SentimentNet(Block):
                 self.output.add(gluon.nn.Dropout(dropout))
                 self.output.add(gluon.nn.Dense(1, flatten=False))
 
-    def forward(self, data, valid_length): # pylint: disable=arguments-differ
+    def hybrid_forward(self, _, data, valid_length): # pylint: disable=arguments-differ
         encoded = self.encoder(self.embedding(data))  # Shape(T, N, C)
         agg_state = self.agg_layer(encoded, valid_length)
         out = self.output(agg_state)
@@ -148,6 +148,7 @@ with net.name_scope():
 
 net.embedding = lm_model.embedding
 net.encoder = lm_model.encoder
+net.hybridize()
 
 
 # Dataset preprocessing
@@ -180,9 +181,9 @@ train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
 valid_dataset, valid_data_lengths = preprocess_dataset(valid_dataset)
 test_dataset, test_data_lengths = preprocess_dataset(test_dataset)
 
-# Construct the DataLoader
+# Construct the DataLoader. Pad data and stack label
 batchify_fn = nlp.data.batchify.Tuple(nlp.data.batchify.Pad(axis=0, ret_length=True),
-                                      nlp.data.batchify.Stack())  # Pad data and stack label
+                                      nlp.data.batchify.Stack(dtype='float32'))
 if args.bucket_type is None:
     print('Bucketing strategy is not used!')
     train_dataloader = DataLoader(dataset=train_dataset,
@@ -328,10 +329,10 @@ def train():
             # Reset stop_early if the validation loss finds a new low value
             print('Observed Improvement.')
             stop_early = 0
-            net.save_params(args.save_prefix + '_{:04d}.params'.format(epoch))
+            net.save_parameters(args.save_prefix + '_{:04d}.params'.format(epoch))
             best_valid_acc = valid_acc
 
-    net.load_params(glob.glob(args.save_prefix+'_*.params')[-1], context)
+    net.load_parameters(glob.glob(args.save_prefix+'_*.params')[-1], context)
     valid_avg_L, valid_acc = evaluate(valid_dataloader)
     test_avg_L, test_acc = evaluate(test_dataloader)
     print('Best validation loss %g, validation acc %.4f'%(valid_avg_L, valid_acc))

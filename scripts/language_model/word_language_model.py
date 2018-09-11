@@ -128,13 +128,16 @@ train_dataset, val_dataset, test_dataset = \
                         skip_empty=False, bos=None, eos='<eos>')
      for segment in ['train', 'val', 'test']]
 
-vocab = nlp.Vocab(counter=nlp.data.Counter(train_dataset[0]), padding_token=None, bos_token=None)
+vocab = nlp.Vocab(counter=nlp.data.Counter(train_dataset), padding_token=None, bos_token=None)
 
-train_data = train_dataset.batchify(vocab, args.batch_size)
+train_batchify = nlp.data.batchify.CorpusBatchify(vocab, args.batch_size)
+train_data = train_batchify(train_dataset)
 val_batch_size = 10
-val_data = val_dataset.batchify(vocab, val_batch_size)
+val_batchify = nlp.data.batchify.CorpusBatchify(vocab, val_batch_size)
+val_data = val_batchify(val_dataset)
 test_batch_size = 1
-test_data = test_dataset.batchify(vocab, test_batch_size)
+test_batchify = nlp.data.batchify.CorpusBatchify(vocab, test_batch_size)
+test_data = test_batchify(test_dataset)
 
 if args.test_mode:
     args.emsize = 200
@@ -185,8 +188,6 @@ elif args.optimizer == 'adam':
 trainer = gluon.Trainer(model.collect_params(), args.optimizer, trainer_params)
 
 loss = gluon.loss.SoftmaxCrossEntropyLoss()
-ar_loss = nlp.loss.ActivationRegularizationLoss(args.alpha)
-tar_loss = nlp.loss.TemporalActivationRegularizationLoss(args.beta)
 
 
 class JointActivationRegularizationLoss(gluon.loss.Loss):
@@ -202,10 +203,11 @@ class JointActivationRegularizationLoss(gluon.loss.Loss):
     ----------
     loss : gluon.loss.Loss
         The standard loss
-    ar_loss: gluonnlp.loss.ActivationRegularizationLoss
-        The activation regularization
-    tar_loss: gluonnlp.loss.TemporalActivationRegularizationLoss
-        The temporal activation regularization
+    alpha: float
+        The activation regularization parameter in gluonnlp.loss.ActivationRegularizationLoss
+    beta: float
+        The temporal activation regularization parameter in
+        gluonnlp.loss.TemporalActivationRegularizationLoss
 
     Inputs:
         - **out**: NDArray
@@ -224,11 +226,14 @@ class JointActivationRegularizationLoss(gluon.loss.Loss):
           batch_axis are averaged out.
     """
 
-    def __init__(self, l, ar_l, tar_l, weight=None, batch_axis=None, **kwargs):
+    def __init__(self, l, alpha, beta, weight=None, batch_axis=None, **kwargs):
         super(JointActivationRegularizationLoss, self).__init__(weight, batch_axis, **kwargs)
         self._loss = l
-        self._ar_loss = ar_l
-        self._tar_loss = tar_l
+        self._alpha, self._beta = alpha, beta
+        if alpha:
+            self._ar_loss = nlp.loss.ActivationRegularizationLoss(alpha)
+        if beta:
+            self._tar_loss = nlp.loss.TemporalActivationRegularizationLoss(beta)
 
     def __repr__(self):
         s = 'JointActivationTemporalActivationRegularizationLoss'
@@ -237,12 +242,14 @@ class JointActivationRegularizationLoss(gluon.loss.Loss):
     def hybrid_forward(self, F, out, target, states, dropped_states): # pylint: disable=arguments-differ
         # pylint: disable=unused-argument
         l = self._loss(out.reshape(-3, -1), target.reshape(-1,))
-        l = l + self._ar_loss(*dropped_states)
-        l = l + self._tar_loss(*states)
+        if self._alpha:
+            l = l + self._ar_loss(*dropped_states)
+        if self._beta:
+            l = l + self._tar_loss(*states)
         return l
 
 
-joint_loss = JointActivationRegularizationLoss(loss, ar_loss, tar_loss)
+joint_loss = JointActivationRegularizationLoss(loss, args.alpha, args.beta)
 
 ###############################################################################
 # Training code
@@ -271,7 +278,7 @@ def get_batch(data_source, i, seq_len=None):
 
     Parameters
     ----------
-    data_source : NDArray
+    data_source : NDArray or mxnet.gluon.Dataset
         The dataset is evaluated on.
     i : int
         The index of the batch, starting from 0.
@@ -313,9 +320,9 @@ def evaluate(data_source, batch_size, segment, ctx=None):
     total_L = 0.0
     ntotal = 0
     if segment == 'val':
-        model_eval.load_params(args.save + '.val', context)
+        model_eval.load_parameters(args.save + '.val', context)
     elif segment == 'test':
-        model_eval.load_params(args.save, context)
+        model_eval.load_parameters(args.save, context)
     hidden = model_eval.begin_state(batch_size, func=mx.nd.zeros, ctx=context[0])
     for i in range(0, len(data_source) - 1, args.bptt):
         data, target = get_batch(data_source, i)
@@ -387,7 +394,7 @@ def train():
 
         print('[Epoch %d] throughput %.2f samples/s'%(
             epoch, (args.batch_size * len(train_data)) / (time.time() - start_epoch_time)))
-        model.save_params(args.save + '.val')
+        model.save_parameters(args.save + '.val')
         val_L = evaluate(val_data, val_batch_size, 'val', context[0])
         print('[Epoch %d] time cost %.2fs, valid loss %.2f, valid ppl %.2f'%(
             epoch, time.time()-start_epoch_time, val_L, math.exp(val_L)))
@@ -395,7 +402,7 @@ def train():
         if val_L < best_val:
             update_lr_epoch = 0
             best_val = val_L
-            model.save_params(args.save)
+            model.save_parameters(args.save)
             test_L = evaluate(test_data, test_batch_size, 'test', context[0])
             print('test loss %.2f, test ppl %.2f'%(test_L, math.exp(test_L)))
         else:

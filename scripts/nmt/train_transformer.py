@@ -47,7 +47,8 @@ from mxnet import gluon
 from mxnet.gluon.data import ArrayDataset, SimpleDataset
 from mxnet.gluon.data import DataLoader
 import gluonnlp.data.batchify as btf
-from gluonnlp.data import NLTKMosesDetokenizer
+from gluonnlp.data import SacreMosesDetokenizer
+from gluonnlp.data import ShardedDataLoader
 from gluonnlp.data import ConstWidthBucket, LinearWidthBucket, ExpWidthBucket,\
     FixedBucketSampler, IWSLT2015, WMT2016, WMT2016BPE, WMT2014, WMT2014BPE
 from gluonnlp.model import BeamSearchScorer
@@ -57,6 +58,7 @@ from loss import SoftmaxCEMaskedLoss, LabelSmoothing
 from utils import logging_config
 from bleu import _bpe_to_words, compute_bleu
 import _constants as _C
+from dataset import TOY
 
 np.random.seed(100)
 random.seed(100)
@@ -80,9 +82,9 @@ parser.add_argument('--num_layers', type=int, default=6,
                     help='number of layers in the encoder and decoder')
 parser.add_argument('--num_heads', type=int, default=8,
                     help='number of heads in multi-head attention')
-parser.add_argument('--scaled', type=bool, default=True, help='whether to use scale in attention')
+parser.add_argument('--scaled', action='store_true', help='Turn on to use scale in attention')
 parser.add_argument('--batch_size', type=int, default=1024,
-                    help='Batch size. Number of tokens in a minibatch')
+                    help='Batch size. Number of tokens per gpu in a minibatch')
 parser.add_argument('--beam_size', type=int, default=4, help='Beam size')
 parser.add_argument('--lp_alpha', type=float, default=0.6,
                     help='Alpha used in calculating the length penalty')
@@ -109,8 +111,8 @@ parser.add_argument('--num_accumulated', type=int, default=1,
                          'This is useful to mimic large batch training with limited gpu memory')
 parser.add_argument('--magnitude', type=float, default=3.0,
                     help='Magnitude of Xavier initialization')
-parser.add_argument('--average_checkpoint', type=bool, default=False,
-                    help='Whether to perform final testing based on '
+parser.add_argument('--average_checkpoint', action='store_true',
+                    help='Turn on to perform final testing based on '
                          'the average of last few checkpoints')
 parser.add_argument('--num_averages', type=int, default=5,
                     help='Perform final testing based on the '
@@ -118,10 +120,15 @@ parser.add_argument('--num_averages', type=int, default=5,
                          'This is only used if average_checkpoint is True')
 parser.add_argument('--average_start', type=int, default=5,
                     help='Perform average SGD on last average_start epochs')
-parser.add_argument('--bleu', type=str, default='t2t',
+parser.add_argument('--full', action='store_true',
+                    help='In default, we use the test dataset in'
+                         ' http://statmt.org/wmt14/test-filtered.tgz.'
+                         ' When the option full is turned on, we use the test dataset in'
+                         ' http://statmt.org/wmt14/test-full.tgz')
+parser.add_argument('--bleu', type=str, default='tweaked',
                     help='Schemes for computing bleu score. It can be: '
-                    '"t2t": it uses similar steps in get_ende_bleu.sh in tensor2tensor repository,'
-                    ' where compound words are put in ATAT format; '
+                    '"tweaked": it uses similar steps in get_ende_bleu.sh in tensor2tensor '
+                    'repository, where compound words are put in ATAT format; '
                     '"13a": This uses official WMT tokenization and produces the same results'
                     ' as official script (mteval-v13a.pl) used by WMT; '
                     '"intl": This use international tokenization in mteval-v14a.pl')
@@ -239,7 +246,14 @@ def load_translation_data(dataset, src_lang='en', tgt_lang='vi'):
                                                         args.src_max_len, args.tgt_max_len)
         data_train = WMT2014BPE('train', src_lang=src_lang, tgt_lang=tgt_lang)
         data_val = WMT2014BPE('newstest2013', src_lang=src_lang, tgt_lang=tgt_lang)
-        data_test = WMT2014BPE('newstest2014', src_lang=src_lang, tgt_lang=tgt_lang)
+        data_test = WMT2014BPE('newstest2014', src_lang=src_lang, tgt_lang=tgt_lang,
+                               full=args.full)
+    elif dataset == 'TOY':
+        common_prefix = 'TOY_{}_{}_{}_{}'.format(src_lang, tgt_lang,
+                                                 args.src_max_len, args.tgt_max_len)
+        data_train = TOY('train', src_lang=src_lang, tgt_lang=tgt_lang)
+        data_val = TOY('val', src_lang=src_lang, tgt_lang=tgt_lang)
+        data_test = TOY('test', src_lang=src_lang, tgt_lang=tgt_lang)
     else:
         raise NotImplementedError
     src_vocab, tgt_vocab = data_train.src_vocab, data_train.tgt_vocab
@@ -252,11 +266,11 @@ def load_translation_data(dataset, src_lang='en', tgt_lang='vi'):
     if not data_val_processed:
         data_val_processed = process_dataset(data_val, src_vocab, tgt_vocab)
         cache_dataset(data_val_processed, common_prefix + '_val')
-    data_test_processed = load_cached_dataset(common_prefix + '_test')
+    data_test_processed = load_cached_dataset(common_prefix + '_' + str(args.full) + '_test')
     if not data_test_processed:
         data_test_processed = process_dataset(data_test, src_vocab, tgt_vocab)
-        cache_dataset(data_test_processed, common_prefix + '_test')
-    if args.bleu == 't2t':
+        cache_dataset(data_test_processed, common_prefix + '_' + str(args.full) + '_test')
+    if args.bleu == 'tweaked':
         fetch_tgt_sentence = lambda src, tgt: tgt.split()
         val_tgt_sentences = list(data_val.transform(fetch_tgt_sentence))
         test_tgt_sentences = list(data_test.transform(fetch_tgt_sentence))
@@ -267,7 +281,11 @@ def load_translation_data(dataset, src_lang='en', tgt_lang='vi'):
             test_text = WMT2016('newstest2014', src_lang=src_lang, tgt_lang=tgt_lang)
         elif dataset == 'WMT2014BPE':
             val_text = WMT2014('newstest2013', src_lang=src_lang, tgt_lang=tgt_lang)
-            test_text = WMT2014('newstest2014', src_lang=src_lang, tgt_lang=tgt_lang)
+            test_text = WMT2014('newstest2014', src_lang=src_lang, tgt_lang=tgt_lang,
+                                full=args.full)
+        elif dataset == 'IWSLT2015' or dataset == 'TOY':
+            val_text = data_val
+            test_text = data_test
         else:
             raise NotImplementedError
         val_tgt_sentences = list(val_text.transform(fetch_tgt_sentence))
@@ -349,7 +367,7 @@ loss_function.hybridize(static_alloc=static_alloc)
 test_loss_function = SoftmaxCEMaskedLoss()
 test_loss_function.hybridize(static_alloc=static_alloc)
 
-detokenizer = NLTKMosesDetokenizer()
+detokenizer = SacreMosesDetokenizer()
 
 
 def evaluate(data_loader, context=ctx[0]):
@@ -394,11 +412,11 @@ def evaluate(data_loader, context=ctx[0]):
     avg_loss = avg_loss / avg_loss_denom
     real_translation_out = [None for _ in range(len(all_inst_ids))]
     for ind, sentence in zip(all_inst_ids, translation_out):
-        if args.bleu == 't2t':
+        if args.bleu == 'tweaked':
             real_translation_out[ind] = sentence
         elif args.bleu == '13a' or args.bleu == 'intl':
-            real_translation_out[ind] = detokenizer.detokenize(_bpe_to_words(sentence),
-                                                               return_str=True)
+            real_translation_out[ind] = detokenizer(_bpe_to_words(sentence),
+                                                    return_str=True)
         else:
             raise NotImplementedError
     return avg_loss, real_translation_out
@@ -418,8 +436,11 @@ def train():
     trainer = gluon.Trainer(model.collect_params(), args.optimizer,
                             {'learning_rate': args.lr, 'beta2': 0.98, 'epsilon': 1e-9})
 
-    train_batchify_fn = btf.Tuple(btf.Pad(), btf.Pad(), btf.Stack(), btf.Stack())
-    test_batchify_fn = btf.Tuple(btf.Pad(), btf.Pad(), btf.Stack(), btf.Stack(), btf.Stack())
+    train_batchify_fn = btf.Tuple(btf.Pad(), btf.Pad(),
+                                  btf.Stack(dtype='float32'), btf.Stack(dtype='float32'))
+    test_batchify_fn = btf.Tuple(btf.Pad(), btf.Pad(),
+                                 btf.Stack(dtype='float32'), btf.Stack(dtype='float32'),
+                                 btf.Stack())
     target_val_lengths = list(map(lambda x: x[-1], data_val_lengths))
     target_test_lengths = list(map(lambda x: x[-1], data_test_lengths))
     if args.bucket_scheme == 'constant':
@@ -436,12 +457,13 @@ def train():
                                              ratio=args.bucket_ratio,
                                              shuffle=True,
                                              use_average_length=True,
+                                             num_shards=len(ctx),
                                              bucket_scheme=bucket_scheme)
     logging.info('Train Batch Sampler:\n{}'.format(train_batch_sampler.stats()))
-    train_data_loader = DataLoader(data_train,
-                                   batch_sampler=train_batch_sampler,
-                                   batchify_fn=train_batchify_fn,
-                                   num_workers=8)
+    train_data_loader = ShardedDataLoader(data_train,
+                                          batch_sampler=train_batch_sampler,
+                                          batchify_fn=train_batchify_fn,
+                                          num_workers=8)
 
     val_batch_sampler = FixedBucketSampler(lengths=target_val_lengths,
                                            batch_size=args.test_batch_size,
@@ -468,9 +490,9 @@ def train():
                                   batchify_fn=test_batchify_fn,
                                   num_workers=8)
 
-    if args.bleu == 't2t':
-        bpe = True
-        split_compound_word = True
+    if args.bleu == 'tweaked':
+        bpe = bool(args.dataset != 'IWSLT2015' and args.dataset != 'TOY')
+        split_compound_word = bpe
         tokenized = True
     elif args.bleu == '13a' or args.bleu == 'intl':
         bpe = False
@@ -493,36 +515,28 @@ def train():
         loss_denom = 0
         step_loss = 0
         log_start_time = time.time()
-        for batch_id, (src_seq, tgt_seq, src_valid_length, tgt_valid_length) \
+        for batch_id, seqs \
                 in enumerate(train_data_loader):
             if batch_id % grad_interval == 0:
                 step_num += 1
                 new_lr = args.lr / math.sqrt(args.num_units) \
                          * min(1. / math.sqrt(step_num), step_num * warmup_steps ** (-1.5))
                 trainer.set_learning_rate(new_lr)
-            src_wc = src_valid_length.sum().asscalar()
-            tgt_wc = tgt_valid_length.sum().asscalar()
-            loss_denom += tgt_wc - tgt_valid_length.shape[0]
-            if src_seq.shape[0] > len(ctx):
-                src_seq_list, tgt_seq_list, src_valid_length_list, tgt_valid_length_list \
-                    = [gluon.utils.split_and_load(seq, ctx, batch_axis=0, even_split=False)
-                       for seq in [src_seq, tgt_seq, src_valid_length, tgt_valid_length]]
-            else:
-                src_seq_list = [src_seq.as_in_context(ctx[0])]
-                tgt_seq_list = [tgt_seq.as_in_context(ctx[0])]
-                src_valid_length_list = [src_valid_length.as_in_context(ctx[0])]
-                tgt_valid_length_list = [tgt_valid_length.as_in_context(ctx[0])]
-
+            src_wc, tgt_wc, bs = np.sum([(shard[2].sum(), shard[3].sum(), shard[0].shape[0])
+                                         for shard in seqs], axis=0)
+            src_wc = src_wc.asscalar()
+            tgt_wc = tgt_wc.asscalar()
+            loss_denom += tgt_wc - bs
+            seqs = [[seq.as_in_context(context) for seq in shard]
+                    for context, shard in zip(ctx, seqs)]
             Ls = []
             with mx.autograd.record():
-                for src_seq, tgt_seq, src_valid_length, tgt_valid_length \
-                        in zip(src_seq_list, tgt_seq_list,
-                               src_valid_length_list, tgt_valid_length_list):
+                for src_seq, tgt_seq, src_valid_length, tgt_valid_length in seqs:
                     out, _ = model(src_seq, tgt_seq[:, :-1],
                                    src_valid_length, tgt_valid_length - 1)
                     smoothed_label = label_smoothing(tgt_seq[:, 1:])
                     ls = loss_function(out, smoothed_label, tgt_valid_length - 1).sum()
-                    Ls.append((ls * (tgt_seq.shape[1] - 1)) / args.batch_size)
+                    Ls.append((ls * (tgt_seq.shape[1] - 1)) / args.batch_size / 100.0)
             for L in Ls:
                 L.backward()
             if batch_id % grad_interval == grad_interval - 1 or\
@@ -530,7 +544,7 @@ def train():
                 if average_param_dict is None:
                     average_param_dict = {k: v.data(ctx[0]).copy() for k, v in
                                           model.collect_params().items()}
-                trainer.step(float(loss_denom) / args.batch_size)
+                trainer.step(float(loss_denom) / args.batch_size / 100.0)
                 param_dict = model.collect_params()
                 param_dict.zero_grad()
                 if step_num > average_start:
@@ -540,7 +554,7 @@ def train():
             step_loss += sum([L.asscalar() for L in Ls])
             if batch_id % grad_interval == grad_interval - 1 or\
                     batch_id == len(train_data_loader) - 1:
-                log_avg_loss += step_loss / loss_denom * args.batch_size
+                log_avg_loss += step_loss / loss_denom * args.batch_size * 100.0
                 loss_denom = 0
                 step_loss = 0
             log_wc += src_wc + tgt_wc
@@ -578,9 +592,9 @@ def train():
             best_valid_bleu = valid_bleu_score
             save_path = os.path.join(args.save_dir, 'valid_best.params')
             logging.info('Save best parameters to {}'.format(save_path))
-            model.save_params(save_path)
+            model.save_parameters(save_path)
         save_path = os.path.join(args.save_dir, 'epoch{:d}.params'.format(epoch_id))
-        model.save_params(save_path)
+        model.save_parameters(save_path)
     save_path = os.path.join(args.save_dir, 'average.params')
     mx.nd.save(save_path, average_param_dict)
     if args.average_checkpoint:
@@ -595,7 +609,7 @@ def train():
         for k, v in model.collect_params().items():
             v.set_data(average_param_dict[k])
     else:
-        model.load_params(os.path.join(args.save_dir, 'valid_best.params'), ctx)
+        model.load_parameters(os.path.join(args.save_dir, 'valid_best.params'), ctx)
     valid_loss, valid_translation_out = evaluate(val_data_loader, ctx[0])
     valid_bleu_score, _, _, _, _ = compute_bleu([val_tgt_sentences], valid_translation_out,
                                                 tokenized=tokenized, tokenizer=args.bleu, bpe=bpe,

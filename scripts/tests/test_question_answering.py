@@ -16,6 +16,9 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import os
+import pytest
+
 from mxnet import init, nd
 from mxnet.gluon.data import DataLoader, SimpleDataset
 
@@ -30,6 +33,7 @@ max_chars_per_word = 16
 embedding_size = 100
 
 
+@pytest.mark.serial
 def test_transform_to_nd_array():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)
@@ -42,6 +46,7 @@ def test_transform_to_nd_array():
     assert len(transformed_record) == 7
 
 
+@pytest.mark.serial
 def test_data_loader_able_to_read():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)
@@ -64,6 +69,7 @@ def test_data_loader_able_to_read():
         assert answers is not None
 
 
+@pytest.mark.serial
 def test_load_vocabs():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)

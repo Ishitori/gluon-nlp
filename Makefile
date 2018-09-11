@@ -16,25 +16,44 @@
 # under the License.
 
 ROOTDIR = $(CURDIR)
+MD2IPYNB = $(ROOTDIR)/docs/md2ipynb.py
+
+flake8:
+	flake8 . --exclude conda --count --select=E901,E999,F821,F822,F823 --show-source --statistics
 
 pylint:
 	pylint --rcfile=$(ROOTDIR)/.pylintrc gluonnlp scripts/*/*.py
 
+restruc:
+	python setup.py check --restructuredtext --strict
+
+lint:
+	make flake8
+	make pylint
+	make restruc
+
 docs: release
-	make -C docs html
+	make -C docs html SPHINXOPTS=-W
 
 clean:
-	rm -rf gluonnlp.egg-info build dist | true
-	rm -rf tests/data | true
-	rm scripts/*.zip | true
-	rm docs/examples/*.zip | true
+	git clean -f -d -x --exclude="$(ROOTDIR)/tests/externaldata/*" --exclude=conda
 	make -C docs clean
 
-dist_scripts:
-	find scripts/* -type d -prune | grep -v 'tests\|__pycache__' | xargs -n 1 -I{} zip -r {}.zip {}
+compile_notebooks:
+	for f in $(shell find docs/examples -type f -name '*.md' -print) ; do \
+		DIR=`dirname $$f` ; \
+		BASENAME=`basename $$f` ; \
+		echo $$DIR $$BASENAME ; \
+		cd $$DIR ; \
+		python $(MD2IPYNB) $$BASENAME ; \
+		cd - ; \
+	done;
 
-dist_notebooks:
-	find docs/examples/* -type d -prune | grep -v 'tests\|__pycache__' | xargs -n 1 -I{} zip -r {}.zip {}
+dist_scripts:
+	find scripts/* -type d -prune | grep -v 'tests\|__pycache__' | xargs -t -n 1 -I{} zip -r {}.zip {}
+
+dist_notebooks: compile_notebooks
+	find docs/examples/* -type d -prune | grep -v 'tests\|__pycache__' | xargs -t -n 1 -I{} zip -r {}.zip {} -x "*.md"
 
 test:
 	py.test -v --capture=no --durations=0  tests/unittest scripts

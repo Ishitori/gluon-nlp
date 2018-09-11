@@ -1,6 +1,6 @@
 Examples
 ========
-Here are several end-to-end examples of using Gluon NLP Toolkit for modeling tasks.
+Here are several end-to-end examples of using GluonNLP Toolkit for modeling tasks.
 
 .. toctree::
    :maxdepth: 1
@@ -9,3 +9,4 @@ Here are several end-to-end examples of using Gluon NLP Toolkit for modeling tas
    word_embedding/word_embedding_training.ipynb
    language_model/language_model.ipynb
    sentiment_analysis/sentiment_analysis.ipynb
+   nmt/gnmt.ipynb

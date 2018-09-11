@@ -1,7 +1,7 @@
 gluonnlp.data
 =============
 
-Gluon NLP Toolkit provides tools for building efficient data pipelines for NLP tasks.
+GluonNLP Toolkit provides tools for building efficient data pipelines for NLP tasks.
 
 .. currentmodule:: gluonnlp.data
 
@@ -121,7 +121,6 @@ load custom datasets.
 
     TextLineDataset
     CorpusDataset
-    LanguageModelDataset
 
 DataStreams
 -----------
@@ -134,8 +133,9 @@ stream large custom data.
 
     DataStream
     SimpleDataStream
-    CorpusStream
-    LanguageModelStream
+    DatasetStream
+    SimpleDatasetStream
+    PrefetchingStream
 
 Transforms
 ----------
@@ -149,7 +149,9 @@ with `Dataset.transform` method.
     ClipSequence
     PadSequence
     NLTKMosesTokenizer
+    SacreMosesTokenizer
     SpacyTokenizer
+    SacreMosesDetokenizer
     NLTKMosesDetokenizer
 
 Samplers
@@ -174,6 +176,16 @@ The `FixedBucketSampler` uses following bucket scheme classes to generate bucket
     LinearWidthBucket
     ExpWidthBucket
 
+DataLoaders
+-----------
+
+DataLoaders loads data from a dataset and returns mini-batches of data
+
+.. autosummary::
+    :nosignatures:
+
+    ShardedDataLoader
+
 Utilities
 ---------
 
@@ -197,3 +209,4 @@ API Reference
 .. automodule:: gluonnlp.data
    :members:
    :imported-members:
+   :special-members: __iter__

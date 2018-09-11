@@ -1,7 +1,7 @@
 gluonnlp.model
 ==============
 
-Gluon NLP Toolkit supplies models for common NLP tasks with pre-trained weights. By default,
+GluonNLP Toolkit supplies models for common NLP tasks with pre-trained weights. By default,
 all requested pre-trained weights are downloaded from public repo and stored in ~/.mxnet/models/.
 
 .. currentmodule:: gluonnlp.model
@@ -18,8 +18,10 @@ Language Modeling
     standard_lstm_lm_200
     standard_lstm_lm_650
     standard_lstm_lm_1500
+    big_rnn_lm_2048_512
     StandardRNN
     get_model
+    BigRNN
 
 Convolutional Encoder
 ----------------------
@@ -48,14 +50,15 @@ Attention Cell
     MLPAttentionCell
     DotProductAttentionCell
 
-Beam Search
------------
+Sequence Sampling
+-----------------
 
 .. autosummary::
     :nosignatures:
 
     BeamSearchScorer
     BeamSearchSampler
+    SequenceSampler
 
 Other Modeling Utilities
 ------------------------
@@ -66,6 +69,10 @@ Other Modeling Utilities
     WeightDropParameter
     apply_weight_drop
     L2Normalization
+    ISDense
+    NCEDense
+    SparseISDense
+    SparseNCEDense
 
 API Reference
 -------------

@@ -49,7 +49,7 @@ parser = argparse.ArgumentParser(description=
 parser.add_argument('--bptt', type=int, default=2000,
                     help='sequence length')
 parser.add_argument('--model_name', type=str, default='awd_lstm_lm_1150',
-                    help='name of the pretrained language model')
+                    help='name of the pre-trained language model')
 parser.add_argument('--gpus', type=str,
                     help='list of gpus to run, e.g. 0 or 0,2,5. empty means using cpu.'
                          '(using single gpu is suggested)')
@@ -98,7 +98,7 @@ else:
                                    pretrained=False,
                                    ctx=context)
     cache_cell = nlp.model.train.CacheCell(model, ntokens, args.window, args.theta, args.lambdas)
-    cache_cell.load_params(args.path_to_params_file, ctx=context)
+    cache_cell.load_parameters(args.path_to_params_file, ctx=context)
 
 ###############################################################################
 # Load data
@@ -109,10 +109,9 @@ val_dataset, test_dataset = \
                         skip_empty=False, bos=None, eos='<eos>')
      for segment in ['val', 'test']]
 
-val_batch_size = 1
-val_data = val_dataset.batchify(vocab, val_batch_size)
-test_batch_size = 1
-test_data = test_dataset.batchify(vocab, test_batch_size)
+batchify = nlp.data.batchify.CorpusBatchify(vocab, 1)
+val_data = batchify(val_dataset)
+test_data = batchify(test_dataset)
 
 ###############################################################################
 # Training
@@ -203,8 +202,8 @@ def evaluate(data_source, batch_size, ctx=None):
 
 if __name__ == '__main__':
     start_pipeline_time = time.time()
-    final_val_L = evaluate(val_data, val_batch_size, context[0])
-    final_test_L = evaluate(test_data, test_batch_size, context[0])
+    final_val_L = evaluate(val_data, 1, context[0])
+    final_test_L = evaluate(test_data, 1, context[0])
     print('Best validation loss %.2f, val ppl %.2f'%(final_val_L, math.exp(final_val_L)))
     print('Best test loss %.2f, test ppl %.2f'%(final_test_L, math.exp(final_test_L)))
     print('Total time cost %.2fs'%(time.time()-start_pipeline_time))

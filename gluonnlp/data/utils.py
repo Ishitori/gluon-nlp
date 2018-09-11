@@ -21,11 +21,15 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
-__all__ = ['Counter', 'count_tokens', 'concat_sequence', 'slice_sequence', 'train_valid_split']
+__all__ = [
+    'Counter', 'count_tokens', 'concat_sequence', 'slice_sequence', 'train_valid_split',
+    'line_splitter', 'whitespace_splitter'
+]
 
 import os
 import collections
 import zipfile
+import tarfile
 import numpy as np
 
 from mxnet.gluon.data import SimpleDataset
@@ -207,7 +211,8 @@ def _slice_pad_length(num_items, length, overlap=0):
         return 0
 
 
-_vocab_sha1 = {'wikitext-2': 'be36dc5238c2e7d69720881647ab72eb506d0131'}
+_vocab_sha1 = {'wikitext-2': 'be36dc5238c2e7d69720881647ab72eb506d0131',
+               'gbw': 'ebb1a287ca14d8fa6f167c3a779e5e7ed63ac69f'}
 _url_format = '{repo_url}gluon/dataset/vocab/{file_name}.zip'
 
 
@@ -245,8 +250,9 @@ def short_hash(name):
         raise ValueError('Vocabulary for {name} is not available.'.format(name=name))
     return _vocab_sha1[name][:8]
 
+
 def _load_pretrained_vocab(name, root=os.path.join('~', '.mxnet', 'models')):
-    """Load the accompanying vocabulary object for pretrained model.
+    """Load the accompanying vocabulary object for pre-trained model.
 
     Parameters
     ----------
@@ -258,7 +264,7 @@ def _load_pretrained_vocab(name, root=os.path.join('~', '.mxnet', 'models')):
     Returns
     -------
     Vocab
-        Loaded vocabulary object for the pretrained model.
+        Loaded vocabulary object for the pre-trained model.
     """
     file_name = '{name}-{short_hash}'.format(name=name,
                                              short_hash=short_hash(name))
@@ -292,6 +298,7 @@ def _load_pretrained_vocab(name, root=os.path.join('~', '.mxnet', 'models')):
     else:
         raise ValueError('Downloaded file has different hash. Please try again.')
 
+
 def _load_vocab_file(file_path):
     with open(file_path, 'r') as f:
         from ..vocab import Vocab
@@ -304,3 +311,56 @@ def _get_home_dir():
     # expand ~ to actual path
     _home_dir = os.path.expanduser(_home_dir)
     return _home_dir
+
+
+def _extract_archive(file, target_dir):
+    """Extract archive file
+
+    Parameters
+    ----------
+    file : str
+        Absolute path of the archive file.
+    target_dir : str
+        Target directory of the archive to be uncompressed
+
+    """
+    if file.endswith('.gz') or file.endswith('.tar') or file.endswith('.tgz'):
+        archive = tarfile.open(file, 'r')
+    elif file.endswith('.zip'):
+        archive = zipfile.ZipFile(file, 'r')
+    else:
+        raise Exception('Unrecognized file type: ' + file)
+    archive.extractall(path=target_dir)
+    archive.close()
+
+
+def line_splitter(s):
+    """Split a string at newlines.
+
+    Parameters
+    ----------
+    s : str
+        The string to be split
+
+    Returns
+    --------
+    List[str]
+        List of strings. Obtained by calling s.splitlines().
+
+    """
+    return s.splitlines()
+
+def whitespace_splitter(s):
+    """Split a string at whitespace.
+
+    Parameters
+    ----------
+    s : str
+        The string to be split
+
+    Returns
+    --------
+    List[str]
+        List of strings. Obtained by calling s.split().
+    """
+    return s.split()

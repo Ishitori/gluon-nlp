@@ -16,15 +16,21 @@ GluonNLP: Your Choice of Deep Learning for NLP
 .. raw:: html
 
    <a href='http://ci.mxnet.io/job/gluon-nlp/job/master/'><img src='https://img.shields.io/badge/python-2.7%2C%203.6-blue.svg'></a>
-   <a href='http://ci.mxnet.io/job/gluon-nlp/job/master/'><img src='https://codecov.io/gh/leezu/gluon-nlp/branch/master/graph/badge.svg?token=xQ2HKDk9ux'></a>
+   <a href='https://codecov.io/gh/dmlc/gluon-nlp'><img src='https://codecov.io/gh/dmlc/gluon-nlp/branch/master/graph/badge.svg'></a>
    <a href='http://ci.mxnet.io/job/gluon-nlp/job/master/'><img src='http://ci.mxnet.io/job/gluon-nlp/job/master/badge/icon'></a>
+   <a href='https://pypi.org/project/gluonnlp/#history'><img src='https://img.shields.io/pypi/v/gluonnlp.svg'></a>
 
 GluonNLP is a toolkit that enables easy text preprocessing, datasets
 loading and neural models building to help you speed up your Natural
 Language Processing (NLP) research.
 
-- `Quick Start Guide <#quick-start-guide>`__
-- `Resources <#resources>`__
+- `Quick Start Guide <https://github.com/dmlc/gluon-nlp#quick-start-guide>`__
+- `Resources <https://github.com/dmlc/gluon-nlp#resources>`__
+
+News
+====
+
+- GluonNLP was featured in **KDD 2018 London, Apache MXNet Gluon tutorial**! Check out **https://kdd18.mxnet.io**.
 
 Installation
 ============
@@ -38,7 +44,7 @@ You can install ``MXNet`` and ``GluonNLP`` using pip:
     pip install gluonnlp
 
 Docs 📖
-======
+=======
 
 GluonNLP documentation is available at `our
 website <http://gluon-nlp.mxnet.io/master/index.html>`__.
@@ -46,22 +52,37 @@ website <http://gluon-nlp.mxnet.io/master/index.html>`__.
 Community
 =========
 
-For questions and comments, please visit our `forum <https://discuss.mxnet.io/>`__
-(and `Chinese version <https://discuss.gluon.ai/>`__). For bug reports, please submit Github issues.
+GluonNLP is a community that believes in sharing.
+
+For questions, comments, and bug reports, `Github issues <https://github.com/dmlc/gluon-nlp/issues>`__ is the best way to reach us.
+
+We now have a new Slack channel `here <https://apache-mxnet.slack.com/messages/CCCDM10V9>`__.
+(`register <https://join.slack.com/t/apache-mxnet/shared_invite/enQtNDIzNjY0NjQ2NjYyLTI1ZGNiOGEwOTZkMzMyOTg2ZjNkOWQyNjA5NGRhOTI5NDY4MDY0NmE1MDc2NjEzYWQ1MDZhNzU2NjE5YTMyYTA>`__).
 
 How to Contribute
 =================
 
-GluonNLP has been developed by community members. Everyone is
-more than welcome to contribute. We together can make the GluonNLP better
-and more user-friendly to more users.
+GluonNLP community welcomes contributions from anyone!
 
-Read our `contributing
-guide <http://gluon-nlp.mxnet.io/master/how_to/contribute.html>`__ to get
-to know about our development procedure, how to propose bug fixes and
-improvements, as well as how to build and test your changes to GluonNLP.
+There are lots of opportunities for you to become our `contributors <https://github.com/dmlc/gluon-nlp/blob/master/contributor.rst>`__:
 
-Join our `contributors <contributor.rst>`__.
+- Ask or answer questions on `GitHub issues <https://github.com/dmlc/gluon-nlp/issues>`__.
+- Propose ideas, or review proposed design ideas on `GitHub issues <https://github.com/dmlc/gluon-nlp/issues>`__.
+- Improve the `documentation <http://gluon-nlp.mxnet.io/master/index.html>`__.
+- Contribute bug reports `GitHub issues <https://github.com/dmlc/gluon-nlp/issues>`__.
+- Write new `scripts <https://github.com/dmlc/gluon-nlp/tree/master/scripts>`__ to reproduce
+  state-of-the-art results.
+- Write new `examples <https://github.com/dmlc/gluon-nlp/tree/master/docs/examples>`__ to explain
+  key ideas in NLP methods and models.
+- Write new `public datasets <https://github.com/dmlc/gluon-nlp/tree/master/gluonnlp/data>`__
+  (license permitting).
+- Most importantly, if you have an idea of how to contribute, then do it!
+
+For a list of open starter tasks, check `good first issues <https://github.com/dmlc/gluon-nlp/labels/good%20first%20issue>`__.
+
+Also see our `contributing
+guide <http://gluon-nlp.mxnet.io/master/how_to/contribute.html>`__ on simple how-tos,
+contribution guidelines and more.
 
 Resources
 =========
@@ -109,7 +130,7 @@ Build vocabulary based on the above dataset, for example:
 `Neural Models Building <http://gluon-nlp.mxnet.io/master/api/model.html>`__
 -----------------------------------------------------------------------------------
 
-From the models package, apply an Standard RNN langauge model to the
+From the models package, apply a Standard RNN language model to the
 above dataset:
 
 .. code:: python
