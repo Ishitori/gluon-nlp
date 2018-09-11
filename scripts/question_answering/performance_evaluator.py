@@ -54,6 +54,13 @@ class PerformanceEvaluator:
 
         for i, data in enumerate(eval_dataloader):
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
+
+            record_index = record_index.astype(options.precision)
+            q_words = q_words.astype(options.precision)
+            ctx_words = ctx_words.astype(options.precision)
+            q_chars = q_chars.astype(options.precision)
+            ctx_chars = ctx_chars.astype(options.precision)
+
             record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
             ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
@@ -95,7 +102,7 @@ class PerformanceEvaluator:
         start, end = answer_span
 
         if start > end:
-            return None
+            return ''
 
         question_id = self._mapper.idx_to_question_id[idx]
         context = self._mapper.question_id_to_context[question_id]

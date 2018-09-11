@@ -16,6 +16,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import multiprocessing
 import os
 
 import logging
@@ -171,11 +172,12 @@ def run_training(net, dataloader, evaluator, ctx, options):
     """
 
     trainer = Trainer(net.collect_params(), args.optimizer,
-                      {'learning_rate': options.lr}, kvstore="local")
+                      {'learning_rate': options.lr},
+                      kvstore="device")
     loss_function = SoftmaxCrossEntropyLoss()
 
     train_start = time()
-    avg_loss = mx.nd.zeros((1,), ctx=ctx[0])
+    avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
     print("Starting training...")
 
     for e in range(args.epochs):
@@ -187,6 +189,14 @@ def run_training(net, dataloader, evaluator, ctx, options):
                 e_start = time()
 
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
+
+            record_index = record_index.astype(options.precision)
+            q_words = q_words.astype(options.precision)
+            ctx_words = ctx_words.astype(options.precision)
+            q_chars = q_chars.astype(options.precision)
+            ctx_chars = ctx_chars.astype(options.precision)
+            label = label.astype(options.precision)
+
             record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
             ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
@@ -213,7 +223,11 @@ def run_training(net, dataloader, evaluator, ctx, options):
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
 
-        eval_results = evaluator.evaluate_performance(net, ctx, options)
+        mx.nd.waitall()
+        print("Start evaluate performance")
+        #eval_results = evaluator.evaluate_performance(net, ctx, options)
+        eval_results = {}
+        print("End evaluate performance")
 
         avg_loss /= (i * len(ctx))
 
@@ -226,7 +240,7 @@ def run_training(net, dataloader, evaluator, ctx, options):
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       epoch_time, eval_results))
 
-        save_model_parameters(e, options)
+        save_model_parameters(net, e, options)
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
 
@@ -299,9 +313,7 @@ def get_args():
                         help='Number of layers in Output layer of BiDAF')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
     parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
-    # TODO: Question max length in the paper is 30. Had to set it 400 to make dot_product
-    # similarity work
-    parser.add_argument('--q_max_len', type=int, default=400, help='Maximum length of a question')
+    parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
     parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
     parser.add_argument('--optimizer', type=str, default='adam', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=1E-3, help='Initial learning rate')
@@ -314,6 +326,10 @@ def get_args():
                         help='directory path to save the final model and training log')
     parser.add_argument('--gpu', type=str, default=None,
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
+    parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
+                        help='Use float16 or float32 precision')
+    #parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
+    #                    help='When using float16, shall optimizer use multiprecision.')
 
     args = parser.parse_args()
     return args
@@ -349,5 +365,6 @@ if __name__ == "__main__":
         evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
+        net.cast(args.precision)
 
         run_training(net, train_dataloader, evaluator, ctx, options=args)

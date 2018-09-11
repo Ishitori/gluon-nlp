@@ -38,9 +38,10 @@ class BiDAFEmbedding(Block):
     2. Tensor of characters: batch_size x words_per_question/context x chars_per_word
     """
     def __init__(self, word_vocab, char_vocab, contextual_embedding_nlayers=2, highway_nlayers=2,
-                 embedding_size=100, prefix=None, params=None):
+                 embedding_size=100, precision='float32', prefix=None, params=None):
         super(BiDAFEmbedding, self).__init__(prefix=prefix, params=params)
 
+        self._precision = precision
         self._char_dense_embedding = nn.Embedding(input_dim=len(char_vocab), output_dim=8)
         self._char_conv_embedding = ConvolutionalEncoder(
             embed_size=8,
@@ -79,9 +80,8 @@ class BiDAFEmbedding(Block):
 
         # Step 3. Iterate over tokens of each batch and apply convolutional encoder
         # As a result of a single iteration, we get token embedding for every batch
-        token_list = []
-        for token_of_all_batches in char_level_data:
-            token_list.append(self._char_conv_embedding(token_of_all_batches))
+        token_list = [self._char_conv_embedding(token_of_all_batches)
+                      for token_of_all_batches in char_level_data]
 
         # Step 4. Concat all tokens embeddings to create a single tensor.
         char_embedded = nd.concat(*token_list, dim=0)
@@ -96,7 +96,9 @@ class BiDAFEmbedding(Block):
 
         # Create starting state if necessary
         contextual_embedding_state = \
-            self._contextual_embedding.begin_state(batch_size, ctx=highway_output.context) \
+            self._contextual_embedding.begin_state(batch_size,
+                                                   ctx=highway_output.context,
+                                                   dtype=self._precision) \
             if contextual_embedding_state is None else contextual_embedding_state
 
         # Pass through contextual embedding, which is just bi-LSTM
@@ -131,14 +133,18 @@ class BiDAFModelingLayer(Block):
         Shared Parameters for this `Block`.
     """
     def __init__(self, input_dim=100, nlayers=2, biflag=True,
-                 dropout=0.2, prefix=None, params=None):
+                 dropout=0.2, precision='float32', prefix=None, params=None):
         super(BiDAFModelingLayer, self).__init__(prefix=prefix, params=params)
 
+        self._precision = precision
         self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
                                     bidirectional=biflag)
 
     def forward(self, x):  # pylint: disable=arguments-differ
-        out = self._modeling_layer(x)
+        batch_size = x.shape[1]
+
+        state = self._modeling_layer.begin_state(batch_size, ctx=x.context, dtype=self._precision)
+        out, _ = self._modeling_layer(x, state)
         return out
 
 
@@ -158,7 +164,7 @@ class BiDAFOutputLayer(Block):
     ----------
     span_start_input_dim : `int`, default 100
         The number of features in the hidden state h of LSTM
-    units : `int`, default 10 * ``span_start_input_dim``
+    units : `int`, default 4 * ``span_start_input_dim``
         Number of hidden units of `Dense` layer
     nlayers : `int`, default 1
         Number of recurrent layers.
@@ -173,22 +179,26 @@ class BiDAFOutputLayer(Block):
         Shared Parameters for this `Block`.
     """
     def __init__(self, span_start_input_dim=100, units=None, nlayers=1, biflag=True,
-                 dropout=0.2, prefix=None, params=None):
+                 dropout=0.2, precision='float32', prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
-        units = 10 * span_start_input_dim if units is None else units
+        units = 4 * span_start_input_dim if units is None else units
 
+        self._precision = precision
         self._start_index_dense = nn.Dense(units=units)
         self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
                                     num_layers=nlayers, dropout=dropout, bidirectional=biflag)
         self._end_index_dense = nn.Dense(units=units)
 
     def forward(self, x, m):  # pylint: disable=arguments-differ
+        batch_size = x.shape[1]
+
         # setting batch size as the first dimension
         start_index_input = nd.transpose(nd.concat(x, m, dim=2), axes=(1, 0, 2))
         start_index_dense_output = self._start_index_dense(start_index_input)
 
-        end_index_input_part = self._end_index_lstm(m)
+        state = self._end_index_lstm.begin_state(batch_size, ctx=x.context, dtype=self._precision)
+        end_index_input_part, _ = self._end_index_lstm(m, state)
         end_index_input = nd.transpose(nd.concat(x, end_index_input_part, dim=2),
                                        axes=(1, 0, 2))
 
@@ -223,19 +233,23 @@ class BiDAFModel(Block):
                                                  options.ctx_embedding_num_layers,
                                                  options.highway_num_layers,
                                                  options.embedding_size,
+                                                 precision=options.precision,
                                                  prefix="context_embedding")
             self._q_embedding = BiDAFEmbedding(word_vocab, char_vocab,
                                                options.ctx_embedding_num_layers,
                                                options.highway_num_layers,
                                                options.embedding_size,
+                                               precision=options.precision,
                                                prefix="question_embedding")
             self._attention_layer = BidirectionalAttentionFlow(DotProductSimilarity())
             self._modeling_layer = BiDAFModelingLayer(input_dim=options.embedding_size,
                                                       nlayers=options.modeling_num_layers,
-                                                      dropout=options.dropout)
+                                                      dropout=options.dropout,
+                                                      precision=options.precision)
             self._output_layer = BiDAFOutputLayer(span_start_input_dim=options.embedding_size,
                                                   nlayers=options.output_num_layers,
-                                                  dropout=options.dropout)
+                                                  dropout=options.dropout,
+                                                  precision=options.precision)
 
     def forward(self, x, ctx_embedding_states=None, q_embedding_states=None, *args):
         ctx_embedding_output, ctx_embedding_state = self._ctx_embedding([x[2], x[4]],
@@ -258,10 +272,11 @@ class BiDAFModel(Block):
                                                        self._options.batch_size,
                                                        self._options.ctx_max_len,
                                                        self._options.embedding_size)
-
         # modeling layer expects seq_length x batch_size x channels
         attention_layer_output = nd.transpose(attention_layer_output, axes=(1, 0, 2))
+
         modeling_layer_output = self._modeling_layer(attention_layer_output)
+
         output = self._output_layer(attention_layer_output, modeling_layer_output)
 
         return output, ctx_embedding_state, q_embedding_state
