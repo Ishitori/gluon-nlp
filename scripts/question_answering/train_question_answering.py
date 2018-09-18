@@ -18,6 +18,7 @@
 # under the License.
 import multiprocessing
 import os
+from os.path import isfile
 
 import logging
 import pickle
@@ -265,28 +266,28 @@ def save_model_parameters(net, epoch, options):
     net.save_parameters(save_path)
 
 
-def save_transformed_dataset(dataset, options):
+def save_transformed_dataset(dataset, path):
     """Save processed dataset into a file.
 
     Parameters
     ----------
     dataset : `Dataset`
         Dataset to save
-    options : `Namespace`
-        Saving arguments
+    path : `str`
+        Saving path
     """
-    pickle.dump(dataset, open(options.preprocessed_dataset_path, "wb"))
+    pickle.dump(dataset, open(path, "wb"))
 
 
-def load_transformed_dataset(options):
+def load_transformed_dataset(path):
     """Loads already preprocessed dataset from disk
 
     Parameters
     ----------
-    options : `Namespace`
-        Loading arguments
+    path : `str`
+        Loading path
     """
-    processed_dataset = pickle.load(open(options.preprocessed_dataset_path, "rb"))
+    processed_dataset = pickle.load(open(path, "rb"))
     return processed_dataset
 
 
@@ -295,9 +296,13 @@ def get_args():
     """
     parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
     parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
-    parser.add_argument('--train', type=bool, default=True, help='Run training')
+    parser.add_argument('--train', type=bool, default=False, help='Run training')
+    parser.add_argument('--evaluate', type=bool, default=False, help='Run evaluation on dev dataset')
     parser.add_argument('--preprocessed_dataset_path', type=str,
                         default="preprocessed_dataset.p", help='Path to preprocessed dataset')
+    parser.add_argument('--preprocessed_val_dataset_path', type=str,
+                        default="preprocessed_val_dataset.p", help='Path to preprocessed '
+                                                                   'validation dataset')
     parser.add_argument('--epochs', type=int, default=40, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
                         help='Dimension of the word embedding')
@@ -328,6 +333,8 @@ def get_args():
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
                         help='Use float16 or float32 precision')
+    parser.add_argument('--save_prediction_path', type=str, default='',
+                        help='Path to save predictions')
     #parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
     #                    help='When using float16, shall optimizer use multiprecision.')
 
@@ -345,18 +352,26 @@ if __name__ == "__main__":
             logging.error("Preprocessed_data_path attribute is not provided")
             exit(1)
 
+        print("Running in preprocessing mode")
+
         dataset = SQuAD(segment='train')
         vocab_provider = VocabProvider(dataset)
         transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
-        save_transformed_dataset(transformed_dataset, args)
+        save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
         exit(0)
 
     if args.train:
+        print("Running in training mode")
+
         dataset = SQuAD(segment='train')
         vocab_provider = VocabProvider(dataset)
         mapper = QuestionIdMapper(dataset)
-        transformed_dataset = load_transformed_dataset(args) if args.preprocessed_dataset_path \
-            else transform_dataset(dataset, vocab_provider, options=args)
+
+        if args.preprocessed_dataset_path and isfile(args.preprocessed_dataset_path):
+            transformed_dataset = load_transformed_dataset(args.preprocessed_dataset_path)
+        else:
+            transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
+            save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
 
         train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, args)
         word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
@@ -368,3 +383,36 @@ if __name__ == "__main__":
         net.cast(args.precision)
 
         run_training(net, train_dataloader, evaluator, ctx, options=args)
+
+    if args.evaluate:
+        print("Running in evaluation mode")
+        # we use training dataset to build vocabs
+        model_path = os.path.join(args.save_dir, 'epoch{:d}.params'.format(int(args.epochs) - 1))
+
+        train_dataset = SQuAD(segment='train')
+        vocab_provider = VocabProvider(train_dataset)
+
+        dataset = SQuAD(segment='dev')
+        mapper = QuestionIdMapper(dataset)
+
+        transformed_dataset = load_transformed_dataset(args.preprocessed_val_dataset_path) \
+            if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path) \
+            else transform_dataset(dataset, vocab_provider, options=args)
+
+        if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path):
+            transformed_dataset = load_transformed_dataset(args.preprocessed_val_dataset_path)
+        else:
+            transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
+            save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
+
+        val_dataset, val_dataloader = get_record_per_answer_span(transformed_dataset, args)
+        word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
+        ctx = get_context(args)
+
+        evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+        net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
+        net.load_parameters(model_path, ctx=ctx)
+
+        result = evaluator.evaluate_performance(net, ctx, args)
+        print("Evaluation results on dev dataset: {}".format(result))
+

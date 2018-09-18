@@ -67,8 +67,13 @@ class PerformanceEvaluator:
             q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
             ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
 
+            outs = []
+
             for ri, qw, cw, qc, cc in zip(record_index, q_words, ctx_words, q_chars, ctx_chars):
                 out, _, _ = net((ri, qw, cw, qc, cc))
+                outs.append(out)
+
+            for out in outs:
                 out_per_index = out.transpose(axes=(1, 0, 2))
                 start_indices = PerformanceEvaluator._get_index(out_per_index[0])
                 end_indices = PerformanceEvaluator._get_index(out_per_index[1])
@@ -80,6 +85,10 @@ class PerformanceEvaluator:
                     end = int(end.asscalar())
                     pred[self._mapper.idx_to_question_id[idx]] = self.get_text_result(idx,
                                                                                       (start, end))
+        if options.save_prediction_path:
+            with open(options.save_prediction_path, "w") as f:
+                for item in pred.items():
+                    f.write("QId {}, Answer: {}\n".format(item[0], item[1]))
 
         return evaluate(self._json_data['data'], pred)
 
