@@ -303,7 +303,7 @@ def get_args():
     parser.add_argument('--preprocessed_val_dataset_path', type=str,
                         default="preprocessed_val_dataset.p", help='Path to preprocessed '
                                                                    'validation dataset')
-    parser.add_argument('--epochs', type=int, default=40, help='Upper epoch limit')
+    parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
                         help='Dimension of the word embedding')
     parser.add_argument('--dropout', type=float, default=0.2,
@@ -320,10 +320,8 @@ def get_args():
     parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
     parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
     parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
-    parser.add_argument('--optimizer', type=str, default='adam', help='optimization algorithm')
-    parser.add_argument('--lr', type=float, default=1E-3, help='Initial learning rate')
-    parser.add_argument('--lr_update_factor', type=float, default=0.5,
-                        help='Learning rate decay factor')
+    parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
+    parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
