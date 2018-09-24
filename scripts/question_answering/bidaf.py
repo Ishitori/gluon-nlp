@@ -32,36 +32,67 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
     """
     def __init__(self,
                  attention_similarity_function,
+                 batch_size,
+                 passage_length,
+                 question_length,
+                 encoding_dim,
                  **kwargs):
         super(BidirectionalAttentionFlow, self).__init__(**kwargs)
 
-        self._matrix_attention = AttentionFlow(attention_similarity_function)
+        self._batch_size = batch_size
+        self._passage_length = passage_length
+        self._question_length = question_length
+        self._encoding_dim = encoding_dim
+        self._matrix_attention = AttentionFlow(attention_similarity_function,
+                                               batch_size, passage_length, question_length,
+                                               encoding_dim)
 
-    def hybrid_forward(self, F, encoded_passage, encoded_question,
-                       question_mask, passage_mask, batch_size, passage_length, encoding_dim):
+    def hybrid_forward(self, F, encoded_passage, encoded_question, question_mask, passage_mask):
         # pylint: disable=arguments-differ
         """
         """
 
         # Shape: (batch_size, passage_length, question_length)
         passage_question_similarity = self._matrix_attention(encoded_passage, encoded_question)
+        passage_question_similarity_shape = (self._batch_size, self._passage_length,
+                                             self._question_length)
+
+        question_mask_shape = (self._batch_size, self._question_length)
         # Shape: (batch_size, passage_length, question_length)
-        passage_question_attention = last_dim_softmax(passage_question_similarity, question_mask)
+        passage_question_attention = last_dim_softmax(F,
+                                                      passage_question_similarity,
+                                                      question_mask,
+                                                      passage_question_similarity_shape,
+                                                      question_mask_shape)
         # Shape: (batch_size, passage_length, encoding_dim)
-        passage_question_vectors = weighted_sum(F, encoded_question, passage_question_attention)
+        encoded_question_shape = (self._batch_size, self._question_length, self._encoding_dim)
+        passage_question_attention_shape = (self._batch_size, self._passage_length,
+                                            self._question_length)
+        passage_question_vectors = weighted_sum(F, encoded_question, passage_question_attention,
+                                                encoded_question_shape,
+                                                passage_question_attention_shape)
 
         # We replace masked values with something really negative here, so they don't affect the
         # max below.
         masked_similarity = passage_question_similarity if question_mask is None else \
-            replace_masked_values(passage_question_similarity,
+            replace_masked_values(F,
+                                  passage_question_similarity,
                                   question_mask.expand_dims(1),
                                   -1e7)
+
         # Shape: (batch_size, passage_length)
         question_passage_similarity = masked_similarity.max(axis=-1)
+
         # Shape: (batch_size, passage_length)
-        question_passage_attention = masked_softmax(question_passage_similarity, passage_mask)
+        question_passage_attention = masked_softmax(F, question_passage_similarity, passage_mask)
+
         # Shape: (batch_size, encoding_dim)
-        question_passage_vector = weighted_sum(F, encoded_passage, question_passage_attention)
+        encoded_passage_shape = (self._batch_size, self._passage_length, self._encoding_dim)
+        question_passage_attention_shape = (self._batch_size, self._passage_length)
+        question_passage_vector = weighted_sum(F, encoded_passage, question_passage_attention,
+                                               encoded_passage_shape,
+                                               question_passage_attention_shape)
+
         # Shape: (batch_size, passage_length, encoding_dim)
         tiled_question_passage_vector = question_passage_vector.expand_dims(1)
 

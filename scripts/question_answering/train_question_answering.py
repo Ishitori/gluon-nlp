@@ -41,7 +41,7 @@ from scripts.question_answering.data_processing import VocabProvider, SQuADTrans
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
-from scripts.question_answering.utils import logging_config
+from scripts.question_answering.utils import logging_config, get_args
 
 np.random.seed(100)
 random.seed(100)
@@ -212,7 +212,7 @@ def run_training(net, dataloader, evaluator, ctx, options):
             for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
                                              q_chars, ctx_chars, label):
                 with autograd.record():
-                    o, _, _ = net((ri, qw, cw, qc, cc))
+                    o, _, _ = net(ri, qw, cw, qc, cc)
                     loss = loss_function(o, l)
                     losses.append(loss)
 
@@ -291,55 +291,6 @@ def load_transformed_dataset(path):
     return processed_dataset
 
 
-def get_args():
-    """Get console arguments
-    """
-    parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
-    parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
-    parser.add_argument('--train', type=bool, default=False, help='Run training')
-    parser.add_argument('--evaluate', type=bool, default=False, help='Run evaluation on dev dataset')
-    parser.add_argument('--preprocessed_dataset_path', type=str,
-                        default="preprocessed_dataset.p", help='Path to preprocessed dataset')
-    parser.add_argument('--preprocessed_val_dataset_path', type=str,
-                        default="preprocessed_val_dataset.p", help='Path to preprocessed '
-                                                                   'validation dataset')
-    parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
-    parser.add_argument('--embedding_size', type=int, default=100,
-                        help='Dimension of the word embedding')
-    parser.add_argument('--dropout', type=float, default=0.2,
-                        help='dropout applied to layers (0 = no dropout)')
-    parser.add_argument('--ctx_embedding_num_layers', type=int, default=2,
-                        help='Number of layers in Contextual embedding layer of BiDAF')
-    parser.add_argument('--highway_num_layers', type=int, default=2,
-                        help='Number of layers in Highway layer of BiDAF')
-    parser.add_argument('--modeling_num_layers', type=int, default=2,
-                        help='Number of layers in Modeling layer of BiDAF')
-    parser.add_argument('--output_num_layers', type=int, default=1,
-                        help='Number of layers in Output layer of BiDAF')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
-    parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
-    parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
-    parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
-    parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
-    parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
-    parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
-                        help='report interval')
-    parser.add_argument('--save_dir', type=str, default='out_dir',
-                        help='directory path to save the final model and training log')
-    parser.add_argument('--gpu', type=str, default=None,
-                        help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
-    parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
-                        help='Use float16 or float32 precision')
-    parser.add_argument('--save_prediction_path', type=str, default='',
-                        help='Path to save predictions')
-    #parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
-    #                    help='When using float16, shall optimizer use multiprecision.')
-
-    args = parser.parse_args()
-    return args
-
-
 if __name__ == "__main__":
     args = get_args()
     print(args)
@@ -379,6 +330,11 @@ if __name__ == "__main__":
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
         net.cast(args.precision)
+        #net._ctx_embedding.hybridize()
+        #net._q_embedding.hybridize()
+        net._attention_layer.hybridize()
+        net._modeling_layer.hybridize()
+        net._output_layer.hybridize()
 
         run_training(net, train_dataloader, evaluator, ctx, options=args)
 

@@ -19,13 +19,20 @@
 import os
 import pytest
 
-from mxnet import init, nd
+from mxnet import init, nd, autograd
+from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset
+from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
+from mxnet.gluon.rnn import LSTM
+from types import SimpleNamespace
 
 import gluonnlp as nlp
 from gluonnlp.data import SQuAD
+from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
 from scripts.question_answering.question_answering import *
+from scripts.question_answering.similarity_function import DotProductSimilarity
+from scripts.question_answering.train_question_answering import get_record_per_answer_span
 
 question_max_length = 30
 context_max_length = 400
@@ -91,24 +98,68 @@ def test_bidaf_embedding():
                                        if i < batch_size])
 
     # need to remove question id before feeding the data to data loader
-    loadable_data = SimpleDataset([(r[0], r[2], r[3], r[4], r[5], r[6]) for r in processed_dataset])
-    dataloader = DataLoader(loadable_data, batch_size=5)
+    loadable_data, dataloader = get_record_per_answer_span(processed_dataset, get_args(batch_size))
 
     word_vocab = vocab_provider.get_word_level_vocab()
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
     char_vocab = vocab_provider.get_char_level_vocab()
 
-    embedding = BiDAFEmbedding(word_vocab=word_vocab, char_vocab=char_vocab)
+    embedding = BiDAFEmbedding(word_vocab=word_vocab,
+                               char_vocab=char_vocab,
+                               batch_size=batch_size,
+                               max_seq_len=question_max_length,
+                               precision="float16")
+    embedding.cast("float16")
     embedding.initialize(init.Xavier(magnitude=2.24))
+    embedding.hybridize(static_alloc=True)
+    state = embedding.begin_state()
 
-    contextual_embedding_h0 = nd.random.uniform(shape=(4, batch_size, 100))
-    contextual_embedding_c0 = nd.random.uniform(shape=(4, batch_size, 100))
+    trainer = Trainer(embedding.collect_params(), "sgd", {"learning_rate": 0.1,
+                                                          "multi_precision": True})
 
-    for i, data in enumerate(dataloader):
-        # passing only question_words_nd and question_chars_nd batch
-        out = embedding([data[1], data[3]], [contextual_embedding_h0, contextual_embedding_c0])
-        assert out is not None
+    for i, (data, label) in enumerate(dataloader):
+        with autograd.record():
+            record_index, q_words, ctx_words, q_chars, ctx_chars = data
+            q_words = q_words.astype("float16")
+            ctx_words = ctx_words.astype("float16")
+            q_chars = q_chars.astype("float16")
+            ctx_chars = ctx_chars.astype("float16")
+            label = label.astype("float16")
+            # passing only question_words_nd and question_chars_nd batch
+            out = embedding(q_words, q_chars, state)
+            assert out is not None
+
+        out.backward()
+        trainer.step(batch_size)
         break
+
+
+def test_attention_layer():
+    batch_size = 5
+
+    ctx_fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 2 * embedding_size),
+                                      dtype="float16")
+
+    q_fake_data = nd.random.uniform(shape=(batch_size, question_max_length, 2 * embedding_size),
+                                    dtype="float16")
+
+    ctx_fake_mask = nd.ones(shape=(batch_size, context_max_length), dtype="float16")
+    q_fake_mask = nd.ones(shape=(batch_size, question_max_length), dtype="float16")
+
+    layer = BidirectionalAttentionFlow(DotProductSimilarity(),
+                                       batch_size,
+                                       context_max_length,
+                                       question_max_length,
+                                       2 * embedding_size)
+
+    layer.cast("float16")
+    layer.initialize()
+    layer.hybridize(static_alloc=True)
+
+    with autograd.record():
+        output = layer(ctx_fake_data, q_fake_data, q_fake_mask, ctx_fake_mask)
+
+    assert output.shape == (batch_size, context_max_length, 8 * embedding_size)
 
 
 def test_modeling_layer():
@@ -117,15 +168,24 @@ def test_modeling_layer():
     # The modeling layer receive input in a shape of batch_size x T x 8d
     # T is the sequence length of context which is context_max_length
     # d is the size of embedding, which is embedding_size
-    fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 8 * embedding_size))
+    fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 8 * embedding_size),
+                                  dtype="float16")
     # We assume that attention is already return data in TNC format
     attention_output = nd.transpose(fake_data, axes=(1, 0, 2))
 
-    layer = BiDAFModelingLayer()
-    # The model doesn't need to know the hidden states, so I don't hold variables for the states
+    layer = BiDAFModelingLayer(batch_size, precision="float16")
+    layer.cast("float16")
     layer.initialize()
+    layer.hybridize(static_alloc=True)
+    state = layer.begin_state()
 
-    output = layer(attention_output)
+    trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": "0.1",
+                                                      "multi_precision": True})
+
+    with autograd.record():
+        output = layer(attention_output, state)
+
+    output.backward()
     # According to the paper, the output should be 2d x T
     assert output.shape == (context_max_length, batch_size, 2 * embedding_size)
 
@@ -138,14 +198,98 @@ def test_output_layer():
     # (batch_size, context_max_length, 8 * embedding_size)
 
     # The modeling layer returns data in TNC format
-    modeling_output = nd.random.uniform(shape=(context_max_length, batch_size, 2 * embedding_size))
+    modeling_output = nd.random.uniform(shape=(context_max_length, batch_size, 2 * embedding_size),
+                                        dtype="float16")
     # The layer assumes that attention is already return data in TNC format
-    attention_output = nd.random.uniform(shape=(context_max_length, batch_size, 8 * embedding_size))
+    attention_output = nd.random.uniform(shape=(context_max_length, batch_size, 8 * embedding_size),
+                                         dtype="float16")
 
-    layer = BiDAFOutputLayer()
+    layer = BiDAFOutputLayer(batch_size, precision="float16")
+    layer.cast("float16")
     # The model doesn't need to know the hidden states, so I don't hold variables for the states
     layer.initialize()
+    layer.hybridize(static_alloc=True)
+    state = layer.begin_state()
 
-    output = layer(attention_output, modeling_output)
+    trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": 0.1,
+                                                      "multi_precision": True})
+
+    with autograd.record():
+        output = layer(attention_output, modeling_output, state)
+
+    output.backward()
     # We expect final numbers as batch_size x 2 (first start index, second end index)
-    assert output.shape == (batch_size, 2)
+    assert output.shape == (batch_size, 2, 400)
+
+
+def test_bidaf_model():
+    options = get_args(batch_size=5)
+
+    dataset = SQuAD(segment='dev', root='tests/data/squad')
+    vocab_provider = VocabProvider(dataset)
+    transformer = SQuADTransform(vocab_provider, question_max_length,
+                                 context_max_length, max_chars_per_word)
+
+    # for performance reason, process only batch_size # of records
+    processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
+                                       if i < options.batch_size])
+
+    # need to remove question id before feeding the data to data loader
+    loadable_data, dataloader = get_record_per_answer_span(processed_dataset, options)
+
+    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
+    char_vocab = vocab_provider.get_char_level_vocab()
+
+    model = BiDAFModel(word_vocab=word_vocab,
+                       char_vocab=char_vocab,
+                       options=options)
+
+    model.cast("float16")
+    model.initialize(init.Xavier(magnitude=2.24))
+    model.hybridize(static_alloc=True)
+
+    ctx_embedding_begin_state = model.ctx_embedding.begin_state()
+    q_embedding_begin_state = model.q_embedding.begin_state()
+    m_layer_begin_state = model.modeling_layer.begin_state()
+    o_layer_begin_state = model.output_layer.begin_state()
+
+    loss_function = SoftmaxCrossEntropyLoss()
+    trainer = Trainer(model.collect_params(), "adadelta", {"learning_rate": 0.5,
+                                                      "multi_precision": True})
+
+    for i, (data, label) in enumerate(dataloader):
+        record_index, q_words, ctx_words, q_chars, ctx_chars = data
+        q_words = q_words.astype("float16")
+        ctx_words = ctx_words.astype("float16")
+        q_chars = q_chars.astype("float16")
+        ctx_chars = ctx_chars.astype("float16")
+        label = label.astype("float16")
+
+        with autograd.record():
+            out = model(record_index, q_words, ctx_words, q_chars, ctx_chars,
+                        ctx_embedding_begin_state, q_embedding_begin_state,
+                        m_layer_begin_state, o_layer_begin_state)
+            loss = loss_function(out, label)
+
+        loss.backward()
+        trainer.step(options.batch_size)
+        break
+
+
+def get_args(batch_size):
+    options = SimpleNamespace()
+    options.ctx_embedding_num_layers = 2
+    options.embedding_size = 100
+    options.dropout = 0.2
+    options.ctx_embedding_num_layers = 2
+    options.highway_num_layers = 2
+    options.modeling_num_layers = 2
+    options.output_num_layers = 2
+    options.batch_size = batch_size
+    options.ctx_max_len = context_max_length
+    options.q_max_len = question_max_length
+    options.word_max_len = max_chars_per_word
+    options.precision = "float16"
+
+    return options

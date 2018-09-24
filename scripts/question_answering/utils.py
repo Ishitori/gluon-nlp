@@ -16,6 +16,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import argparse
 import os
 
 import inspect
@@ -71,6 +72,55 @@ def logging_config(folder=None, name=None, level=logging.DEBUG, console_level=lo
         logging.root.addHandler(logconsole)
 
     return folder
+
+
+def get_args():
+    """Get console arguments
+    """
+    parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
+    parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
+    parser.add_argument('--train', type=bool, default=False, help='Run training')
+    parser.add_argument('--evaluate', type=bool, default=False, help='Run evaluation on dev dataset')
+    parser.add_argument('--preprocessed_dataset_path', type=str,
+                        default="preprocessed_dataset.p", help='Path to preprocessed dataset')
+    parser.add_argument('--preprocessed_val_dataset_path', type=str,
+                        default="preprocessed_val_dataset.p", help='Path to preprocessed '
+                                                                   'validation dataset')
+    parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
+    parser.add_argument('--embedding_size', type=int, default=100,
+                        help='Dimension of the word embedding')
+    parser.add_argument('--dropout', type=float, default=0.2,
+                        help='dropout applied to layers (0 = no dropout)')
+    parser.add_argument('--ctx_embedding_num_layers', type=int, default=2,
+                        help='Number of layers in Contextual embedding layer of BiDAF')
+    parser.add_argument('--highway_num_layers', type=int, default=2,
+                        help='Number of layers in Highway layer of BiDAF')
+    parser.add_argument('--modeling_num_layers', type=int, default=2,
+                        help='Number of layers in Modeling layer of BiDAF')
+    parser.add_argument('--output_num_layers', type=int, default=1,
+                        help='Number of layers in Output layer of BiDAF')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
+    parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
+    parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
+    parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
+    parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
+    parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
+    parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+                        help='report interval')
+    parser.add_argument('--save_dir', type=str, default='out_dir',
+                        help='directory path to save the final model and training log')
+    parser.add_argument('--gpu', type=str, default=None,
+                        help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
+    parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
+                        help='Use float16 or float32 precision')
+    parser.add_argument('--save_prediction_path', type=str, default='',
+                        help='Path to save predictions')
+    parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
+                       help='When using float16, shall optimizer use multiprecision.')
+
+    args = parser.parse_args()
+    return args
 
 
 def get_combined_dim(combination, tensor_dims):
@@ -153,7 +203,7 @@ def combine_tensors(combination, tensors):
     return nd.concat(to_concatenate, dim=-1)
 
 
-def masked_softmax(vector, mask):
+def masked_softmax(F, vector, mask):
     """
     ``nd.softmax(vector)`` does not work if some elements of ``vector`` should be
     masked.  This performs a softmax on just the non-masked portions of ``vector``.  Passing
@@ -166,12 +216,12 @@ def masked_softmax(vector, mask):
     that uses categorical cross-entropy loss.
     """
     if mask is None:
-        result = nd.softmax(vector, axis=-1)
+        result = F.softmax(vector, axis=-1)
     else:
         # To limit numerical errors from large vector elements outside the mask, we zero these out.
-        result = nd.softmax(vector * mask, axis=-1)
+        result = F.softmax(vector * mask, axis=-1)
         result = result * mask
-        result = result / (result.sum(axis=1, keepdims=True) + 1e-13)
+        result = F.broadcast_div(result, (result.sum(axis=1, keepdims=True) + 1e-13))
     return result
 
 
@@ -203,9 +253,12 @@ def masked_log_softmax(vector, mask):
     return nd.log_softmax(vector, axis=1)
 
 
-def _last_dimension_applicator(function_to_apply,
+def _last_dimension_applicator(F,
+                               function_to_apply,
                                tensor,
-                               mask):
+                               mask,
+                               tensor_shape,
+                               mask_shape):
     """
     Takes a tensor with 3 or more dimensions and applies a function over the last dimension.  We
     assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
@@ -213,36 +266,38 @@ def _last_dimension_applicator(function_to_apply,
     has the same shape as the tensor, then flatten them both to be 2D, pass them through
     the function and put the tensor back in its original shape.
     """
-    tensor_shape = tensor.shape
-    reshaped_tensor = tensor.reshape(-1, tensor.shape[-1])
+    reshaped_tensor = tensor.reshape(shape=(-1, tensor_shape[-1]))
+
     if mask is not None:
-        while len(mask.shape) < len(tensor.shape):
+        shape_difference = len(tensor_shape) - len(mask_shape)
+        for i in range(0, shape_difference):
             mask = mask.expand_dims(1)
-        mask = mask.broadcast_to(shape=tensor.shape)
-        mask = mask.reshape(-1, mask.shape[-1])
-    reshaped_result = function_to_apply(reshaped_tensor, mask)
-    return reshaped_result.reshape(*tensor_shape)
+        mask = mask.broadcast_to(shape=tensor_shape)
+        mask = mask.reshape(shape=(-1, mask_shape[-1]))
+    reshaped_result = function_to_apply(F, reshaped_tensor, mask)
+    return reshaped_result.reshape(shape=tensor_shape)
+    return reshaped_result
 
 
-def last_dim_softmax(tensor, mask):
+def last_dim_softmax(F, tensor, mask, tensor_shape, mask_shape):
     """
     Takes a tensor with 3 or more dimensions and does a masked softmax over the last dimension.  We
     assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
     has shape ``(batch_size, sequence_length)``.
     """
-    return _last_dimension_applicator(masked_softmax, tensor, mask)
+    return _last_dimension_applicator(F, masked_softmax, tensor, mask, tensor_shape, mask_shape)
 
 
-def last_dim_log_softmax(tensor, mask):
+def last_dim_log_softmax(F, tensor, mask, tensor_shape, mask_shape):
     """
     Takes a tensor with 3 or more dimensions and does a masked log softmax over the last dimension.
     We assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
     has shape ``(batch_size, sequence_length)``.
     """
-    return _last_dimension_applicator(masked_log_softmax, tensor, mask)
+    return _last_dimension_applicator(F, masked_log_softmax, tensor, mask, tensor_shape, mask_shape)
 
 
-def weighted_sum(F, matrix, attention):
+def weighted_sum(F, matrix, attention, matrix_shape, attention_shape):
     """
     Takes a matrix of vectors and a set of weights over the rows in the matrix (which we call an
     "attention" vector), and returns a weighted sum of the rows in the matrix.  This is the typical
@@ -266,21 +321,21 @@ def weighted_sum(F, matrix, attention):
     ``(batch_size, num_documents, num_queries, embedding_dim)`` respectively.
     """
 
-    if len(attention.shape) == 2 and len(matrix.shape) == 3:
+    if len(attention_shape) == 2 and len(matrix_shape) == 3:
         return F.squeeze(F.batch_dot(attention.expand_dims(1), matrix), axis=1)
-    if len(attention.shape) == 3 and len(matrix.shape) == 3:
+    if len(attention_shape) == 3 and len(matrix_shape) == 3:
         return F.batch_dot(attention, matrix)
-    if len(matrix.shape) - 1 < len(attention.shape):
-        expanded_size = list(matrix.shape)
-        for i in range(len(attention.shape) - len(matrix.shape) + 1):
+    if len(matrix_shape) - 1 < len(attention_shape):
+        expanded_size = list(matrix_shape)
+        for i in range(len(attention_shape) - len(matrix_shape) + 1):
             matrix = matrix.expand_dims(1)
             expanded_size.insert(i + 1, attention.shape[i + 1])
         matrix = matrix.broadcast_to(*expanded_size)
-    intermediate = attention.expand_dims(-1).broadcast_to(matrix.shape) * matrix
+    intermediate = attention.expand_dims(-1).broadcast_to(matrix_shape) * matrix
     return intermediate.sum(axis=-2)
 
 
-def replace_masked_values(tensor, mask, replace_with):
+def replace_masked_values(F, tensor, mask, replace_with):
     """
     Replaces all masked values in ``tensor`` with ``replace_with``.  ``mask`` must be broadcastable
     to the same shape as ``tensor``. We require that ``tensor.dim() == mask.dim()``, as otherwise we
@@ -290,4 +345,4 @@ def replace_masked_values(tensor, mask, replace_with):
     # the `replace_with` value.
     one_minus_mask = 1.0 - mask
     values_to_add = replace_with * one_minus_mask
-    return tensor * mask + values_to_add
+    return F.broadcast_add(F.broadcast_mul(tensor, mask), values_to_add)
