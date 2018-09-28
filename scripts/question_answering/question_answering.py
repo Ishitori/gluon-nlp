@@ -201,16 +201,17 @@ class BiDAFOutputLayer(HybridBlock):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
         units = 4 * span_start_input_dim if units is None else units
+        embedding_size = 1000
 
         self._batch_size = batch_size
         self._precision = precision
 
         with self.name_scope():
-            self._start_index_dense = nn.Dense(units=units, in_units=400000)
+            self._start_index_dense = nn.Dense(units=units, in_units=units * embedding_size)
             self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
                                         num_layers=nlayers, dropout=dropout, bidirectional=biflag,
-                                        input_size=200)
-            self._end_index_dense = nn.Dense(units=units, in_units=400000)
+                                        input_size=2 * span_start_input_dim)
+            self._end_index_dense = nn.Dense(units=units, in_units=units * embedding_size)
 
     def begin_state(self, ctx):
         state_list = [self._end_index_lstm.begin_state(self._batch_size,

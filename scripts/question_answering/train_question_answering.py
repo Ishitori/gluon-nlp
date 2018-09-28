@@ -246,10 +246,6 @@ def run_training(net, dataloader, ctx, options):
                 avg_loss += l.mean().as_in_context(avg_loss.context)
 
         mx.nd.waitall()
-        print("Start evaluate performance")
-        #eval_results = evaluator.evaluate_performance(net, ctx, options)
-        eval_results = {}
-        print("End evaluate performance")
 
         avg_loss /= (i * len(ctx))
 
@@ -258,9 +254,9 @@ def run_training(net, dataloader, ctx, options):
         epoch_time = time() - e_start
 
         print("\tEPOCH {:2}: train loss {:4.2f} | batch {:4} | lr {:5.3f} | "
-              "Time per epoch {:5.2f} seconds | {}"
+              "Time per epoch {:5.2f} seconds"
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
-                      epoch_time, eval_results))
+                      epoch_time))
 
         save_model_parameters(net, e, options)
 
