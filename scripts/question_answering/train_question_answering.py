@@ -102,8 +102,12 @@ def get_record_per_answer_span(processed_dataset, options):
             global_index += 1
 
     loadable_data = ArrayDataset(data_no_label, labels)
-    dataloader = DataLoader(loadable_data, batch_size=options.batch_size, shuffle=True,
-                            last_batch='keep')
+    dataloader = DataLoader(loadable_data,
+                            batch_size=options.batch_size * len(get_context(options)),
+                            shuffle=True,
+                            last_batch='discard',
+                            num_workers=(multiprocessing.cpu_count() -
+                                         len(get_context(options)) - 2))
 
     return loadable_data, dataloader
 
@@ -145,6 +149,7 @@ def get_context(options):
 
     if options.gpu is None:
         ctx.append(mx.cpu(0))
+        ctx.append(mx.cpu(1))
         print('Use CPU')
     else:
         indices = options.gpu.split(',')
@@ -155,7 +160,7 @@ def get_context(options):
     return ctx
 
 
-def run_training(net, dataloader, evaluator, ctx, options):
+def run_training(net, dataloader, ctx, options):
     """Main function to do training of the network
 
     Parameters
@@ -164,18 +169,24 @@ def run_training(net, dataloader, evaluator, ctx, options):
         Network to train
     dataloader : `DataLoader`
         Initialized dataloader
-    evaluator: `PerformanceEvaluator`
-        Used to plug in official evaluation script
     ctx: `Context`
         Training context
     options : `Namespace`
         Training arguments
     """
 
-    trainer = Trainer(net.collect_params(), args.optimizer,
-                      {'learning_rate': options.lr},
-                      kvstore="device")
+    hyperparameters = {'learning_rate': options.lr}
+
+    if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
+        hyperparameters["multi_precision"] = True
+
+    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device")
     loss_function = SoftmaxCrossEntropyLoss()
+
+    ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
+    q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+    m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
+    o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
@@ -209,10 +220,20 @@ def run_training(net, dataloader, evaluator, ctx, options):
             mx.nd.waitall()
             losses = []
 
-            for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
-                                             q_chars, ctx_chars, label):
+            for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
+                q_embedding_begin_state, m_layer_begin_state, \
+                o_layer_begin_state in zip(record_index, q_words, ctx_words,
+                                           q_chars, ctx_chars, label,
+                                           ctx_embedding_begin_state_list,
+                                           q_embedding_begin_state_list,
+                                           m_layer_begin_state_list,
+                                           o_layer_begin_state_list):
                 with autograd.record():
-                    o, _, _ = net(ri, qw, cw, qc, cc)
+                    o = net(qw, cw, qc, cc,
+                            ctx_embedding_begin_state,
+                            q_embedding_begin_state,
+                            m_layer_begin_state,
+                            o_layer_begin_state)
                     loss = loss_function(o, l)
                     losses.append(loss)
 
@@ -293,6 +314,7 @@ def load_transformed_dataset(path):
 
 if __name__ == "__main__":
     args = get_args()
+    args.batch_size = int(args.batch_size / len(get_context(args)))
     print(args)
     logging_config(args.save_dir)
 
@@ -328,15 +350,11 @@ if __name__ == "__main__":
 
         evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
-        net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
         net.cast(args.precision)
-        #net._ctx_embedding.hybridize()
-        #net._q_embedding.hybridize()
-        net._attention_layer.hybridize()
-        net._modeling_layer.hybridize()
-        net._output_layer.hybridize()
+        net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
+        net.hybridize(static_alloc=True)
 
-        run_training(net, train_dataloader, evaluator, ctx, options=args)
+        run_training(net, train_dataloader, ctx, options=args)
 
     if args.evaluate:
         print("Running in evaluation mode")

@@ -47,32 +47,36 @@ class BiDAFEmbedding(HybridBlock):
         self._max_seq_len = max_seq_len
         self._precision = precision
         self._embedding_size = embedding_size
-        self._char_dense_embedding = nn.Embedding(input_dim=len(char_vocab), output_dim=8)
-        self._char_conv_embedding = ConvolutionalEncoder(
-            embed_size=8,
-            num_filters=(100,),
-            ngram_filter_sizes=(5,),
-            num_highway=None,
-            conv_layer_activation='relu',
-            output_size=None
-        )
 
-        self._word_embedding = nn.Embedding(input_dim=len(word_vocab), output_dim=embedding_size)
+        with self.name_scope():
+            self._char_dense_embedding = nn.Embedding(input_dim=len(char_vocab),
+                                                      output_dim=8)
+            self._char_conv_embedding = ConvolutionalEncoder(
+                embed_size=8,
+                num_filters=(100,),
+                ngram_filter_sizes=(5,),
+                num_highway=None,
+                conv_layer_activation='relu',
+                output_size=None
+            )
 
-        self._highway_network = Highway(2 * embedding_size, num_layers=highway_nlayers)
-        self._contextual_embedding = LSTM(hidden_size=embedding_size,
-                                          num_layers=contextual_embedding_nlayers,
-                                          bidirectional=True, input_size=2 * embedding_size)
+            self._word_embedding = nn.Embedding(input_dim=len(word_vocab),
+                                                output_dim=embedding_size)
+
+            self._highway_network = Highway(2 * embedding_size, num_layers=highway_nlayers)
+            self._contextual_embedding = LSTM(hidden_size=embedding_size,
+                                              num_layers=contextual_embedding_nlayers,
+                                              bidirectional=True, input_size=2 * embedding_size)
 
     def initialize(self, init=initializer.Uniform(), ctx=None, verbose=False, force_reinit=False):
         super(BiDAFEmbedding, self).initialize(init, ctx, verbose, force_reinit)
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
 
-    def begin_state(self):
-        state = self._contextual_embedding.begin_state(self._batch_size,
-                                                       dtype=self._precision)
-
-        return state
+    def begin_state(self, ctx):
+        state_list = [self._contextual_embedding.begin_state(self._batch_size,
+                                                             dtype=self._precision,
+                                                             ctx=c) for c in ctx]
+        return state_list
 
     def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
         # Changing shape from NTC to TNC as most MXNet blocks work with TNC format natively
@@ -95,24 +99,21 @@ class BiDAFEmbedding(HybridBlock):
         def convolute(token_of_all_batches, _):
             return self._char_conv_embedding(token_of_all_batches), []
 
-        token_list, _ = F.contrib.foreach(convolute, char_level_data, [])
+        char_embedded, _ = F.contrib.foreach(convolute, char_level_data, [])
 
         # Step 4. Concat all tokens embeddings to create a single tensor.
-        char_embedded = F.concat(*token_list, dim=0)
+        # char_embedded = F.concat(*token_list, dim=0)
 
         # Step 5. Reshape tensor to match dimensions of embedded words
-        char_embedded = char_embedded.reshape(shape=(self._max_seq_len,
-                                                     self._batch_size,
-                                                     self._embedding_size))
+        # char_embedded = char_embedded.reshape(shape=(self._max_seq_len,
+        #                                             self._batch_size,
+        #                                             self._embedding_size))
 
         # Concat embeddings, making channels size = 200
         highway_input = F.concat(char_embedded, word_embedded, dim=2)
 
         # Pass through highway, shape remains unchanged
         highway_output = self._highway_network(highway_input)
-
-        if contextual_embedding_state is None:
-            contextual_embedding_state = self.begin_state()
 
         ce_output, ce_state = self._contextual_embedding(highway_output,
                                                          contextual_embedding_state)
@@ -149,18 +150,18 @@ class BiDAFModelingLayer(HybridBlock):
 
         self._batch_size = batch_size
         self._precision = precision
-        self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
-                                    bidirectional=biflag, input_size=800)
 
-    def begin_state(self):
-        state = self._modeling_layer.begin_state(self._batch_size,
-                                                 dtype=self._precision)
-        return state
+        with self.name_scope():
+            self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
+                                        bidirectional=biflag, input_size=800)
+
+    def begin_state(self, ctx):
+        state_list = [self._modeling_layer.begin_state(self._batch_size,
+                                                       dtype=self._precision,
+                                                       ctx=c) for c in ctx]
+        return state_list
 
     def hybrid_forward(self, F, x, state, *args):
-        if state is None:
-            state = self.begin_state()
-
         out, _ = self._modeling_layer(x, state)
         return out
 
@@ -203,25 +204,25 @@ class BiDAFOutputLayer(HybridBlock):
 
         self._batch_size = batch_size
         self._precision = precision
-        self._start_index_dense = nn.Dense(units=units)
-        self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
-                                    num_layers=nlayers, dropout=dropout, bidirectional=biflag,
-                                    input_size=200)
-        self._end_index_dense = nn.Dense(units=units)
 
-    def begin_state(self):
-        state = self._end_index_lstm.begin_state(self._batch_size,
-                                                 dtype=self._precision)
-        return state
+        with self.name_scope():
+            self._start_index_dense = nn.Dense(units=units, in_units=400000)
+            self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
+                                        num_layers=nlayers, dropout=dropout, bidirectional=biflag,
+                                        input_size=200)
+            self._end_index_dense = nn.Dense(units=units, in_units=400000)
+
+    def begin_state(self, ctx):
+        state_list = [self._end_index_lstm.begin_state(self._batch_size,
+                                                       dtype=self._precision,
+                                                       ctx=c) for c in ctx]
+        return state_list
 
     def hybrid_forward(self, F, x, m, state, *args):  # pylint: disable=arguments-differ
 
         # setting batch size as the first dimension
         start_index_input = F.transpose(F.concat(x, m, dim=2), axes=(1, 0, 2))
         start_index_dense_output = self._start_index_dense(start_index_input)
-
-        if state is None:
-            state = self.begin_state()
 
         end_index_input_part, _ = self._end_index_lstm(m, state)
         end_index_input = F.transpose(F.concat(x, end_index_input_part, dim=2),
@@ -289,7 +290,7 @@ class BiDAFModel(HybridBlock):
                                                  dropout=options.dropout,
                                                  precision=options.precision)
 
-    def hybrid_forward(self, F, ri, qw, cw, qc, cc,
+    def hybrid_forward(self, F, qw, cw, qc, cc,
                        ctx_embedding_states=None,
                        q_embedding_states=None,
                        modeling_layer_states=None,

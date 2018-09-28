@@ -256,7 +256,7 @@ def test_bidaf_model():
 
     loss_function = SoftmaxCrossEntropyLoss()
     trainer = Trainer(model.collect_params(), "adadelta", {"learning_rate": 0.5,
-                                                      "multi_precision": True})
+                                                           "multi_precision": True})
 
     for i, (data, label) in enumerate(dataloader):
         record_index, q_words, ctx_words, q_chars, ctx_chars = data
@@ -275,6 +275,8 @@ def test_bidaf_model():
         loss.backward()
         trainer.step(options.batch_size)
         break
+
+    nd.waitall()
 
 
 def get_args(batch_size):
