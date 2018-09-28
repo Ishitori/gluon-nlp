@@ -66,6 +66,7 @@ class DotProductSimilarity(SimilarityFunction):
         result = (array_1 * array_2).sum(axis=-1)
 
         if self._scale_output:
+            # result *= F.sqrt(array_1.shape[-1])
             result *= F.contrib.div_sqrt_dim(array_1)
 
         return result

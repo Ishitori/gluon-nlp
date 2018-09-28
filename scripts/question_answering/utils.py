@@ -276,7 +276,6 @@ def _last_dimension_applicator(F,
         mask = mask.reshape(shape=(-1, mask_shape[-1]))
     reshaped_result = function_to_apply(F, reshaped_tensor, mask)
     return reshaped_result.reshape(shape=tensor_shape)
-    return reshaped_result
 
 
 def last_dim_softmax(F, tensor, mask, tensor_shape, mask_shape):

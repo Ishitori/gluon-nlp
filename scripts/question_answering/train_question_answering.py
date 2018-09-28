@@ -104,7 +104,7 @@ def get_record_per_answer_span(processed_dataset, options):
     loadable_data = ArrayDataset(data_no_label, labels)
     dataloader = DataLoader(loadable_data,
                             batch_size=options.batch_size * len(get_context(options)),
-                            shuffle=True,
+                            # shuffle=True,
                             last_batch='discard',
                             num_workers=(multiprocessing.cpu_count() -
                                          len(get_context(options)) - 2))
@@ -148,8 +148,7 @@ def get_context(options):
     ctx = []
 
     if options.gpu is None:
-        ctx.append(mx.cpu(0))
-        ctx.append(mx.cpu(1))
+        ctx.append(mx.cpu())
         print('Use CPU')
     else:
         indices = options.gpu.split(',')
@@ -183,17 +182,17 @@ def run_training(net, dataloader, ctx, options):
     trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device")
     loss_function = SoftmaxCrossEntropyLoss()
 
-    ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-    q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
-    m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
-    o_layer_begin_state_list = net.output_layer.begin_state(ctx)
-
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
     print("Starting training...")
 
     for e in range(args.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
+
+        ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
+        q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+        m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
+        o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
         for i, (data, label) in enumerate(dataloader):
             # start timing for the first batch of epoch
