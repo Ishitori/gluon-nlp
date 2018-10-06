@@ -16,6 +16,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import math
+
 import multiprocessing
 import os
 from os.path import isfile
@@ -35,12 +37,13 @@ from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
 import gluonnlp as nlp
-from gluonnlp.data import SQuAD
+from gluonnlp.data import SQuAD, SpacyTokenizer
 
 from scripts.question_answering.data_processing import VocabProvider, SQuADTransform
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
+from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.utils import logging_config, get_args
 
 np.random.seed(100)
@@ -85,7 +88,9 @@ def get_record_per_answer_span(processed_dataset, options):
     Returns
     -------
     data : Tuple
-        A tuple of dataset and dataloader
+        A tuple of dataset and dataloader. Each item in dataset is:
+        (index, question_word_index, context_word_index, question_char_index, context_char_index,
+        answers)
     """
     data_no_label = []
     labels = []
@@ -95,6 +100,11 @@ def get_record_per_answer_span(processed_dataset, options):
     for r in processed_dataset:
         # creating a set out of answer_span will deduplicate them
         for answer_span in set(r[6]):
+            # if after all preprocessing the answer is not in the context anymore,
+            # the item is filtered out
+            if options.filter_long_context and (answer_span[0] > r[3].size or
+                                                answer_span[1] > r[3].size):
+                continue
             # need to remove question id before feeding the data to data loader
             # And I also replace index with global_index when unrolling answers
             data_no_label.append((global_index, r[2], r[3], r[4], r[5]))
@@ -104,11 +114,12 @@ def get_record_per_answer_span(processed_dataset, options):
     loadable_data = ArrayDataset(data_no_label, labels)
     dataloader = DataLoader(loadable_data,
                             batch_size=options.batch_size * len(get_context(options)),
-                            # shuffle=True,
+                            shuffle=True,
                             last_batch='discard',
                             num_workers=(multiprocessing.cpu_count() -
                                          len(get_context(options)) - 2))
 
+    print("Total records for training: {}".format(len(labels)))
     return loadable_data, dataloader
 
 
@@ -174,16 +185,18 @@ def run_training(net, dataloader, ctx, options):
         Training arguments
     """
 
-    hyperparameters = {'learning_rate': options.lr}
+    hyperparameters = {'learning_rate': options.lr, 'clip_gradient': options.clip}
 
     if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
         hyperparameters["multi_precision"] = True
 
-    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device")
+    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
+                      update_on_kvstore=False)
     loss_function = SoftmaxCrossEntropyLoss()
 
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
+    iteration = 1
     print("Starting training...")
 
     for e in range(args.epochs):
@@ -239,10 +252,24 @@ def run_training(net, dataloader, ctx, options):
             for l in losses:
                 l.backward()
 
-            trainer.step(options.batch_size)
+            # if iteration == 1:
+            #     for name, param in net.collect_params().items():
+            #         ema.add(name, param.data(CTX[0]))
+
+            trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
+            trainer.allreduce_grads()
+            # gradients = decay_gradients(net, ctx, options)
+            # gluon.utils.clip_global_norm(gradients, options.clip)
+            reset_embedding_gradients(net, ctx)
+            trainer.update(options.batch_size, ignore_stale_grad=True)
+
+            # for name, param in net.collect_params().items():
+            #     ema(name, param.data(CTX[0]))
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
+
+            iteration += 1
 
         mx.nd.waitall()
 
@@ -252,7 +279,7 @@ def run_training(net, dataloader, ctx, options):
         avg_loss_scalar = avg_loss.asscalar()
         epoch_time = time() - e_start
 
-        print("\tEPOCH {:2}: train loss {:4.2f} | batch {:4} | lr {:5.3f} | "
+        print("\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} | "
               "Time per epoch {:5.2f} seconds"
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       epoch_time))
@@ -260,6 +287,57 @@ def run_training(net, dataloader, ctx, options):
         save_model_parameters(net, e, options)
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
+
+
+def get_learning_rate_per_iteration(iteration, options):
+    """Returns learning rate based on current iteration. Used to implement learning rate warm up
+    technique
+
+    :param int iteration: Number of iteration
+    :param NameSpace options: Training options
+    :return float: learning rate
+    """
+    return min(options.lr, options.lr * (math.log(iteration) / math.log(options.lr_warmup_steps)))
+
+
+def decay_gradients(model, ctx, options):
+    """Apply gradient decay to all layers. And only to UNK and EOS embeddings of Glove layers
+
+    :param BiDAFModel model: Model in training
+    :param ctx: Contexts
+    :param NameSpace options: Training options
+    :return: Array of gradients
+    """
+    gradients = []
+
+    for c in ctx:
+        for name, parameter in model.collect_params().items():
+            grad = parameter.grad(c)
+
+            if is_fixed_embedding_layer(name):
+                grad[0:2] += options.weight_decay * parameter.data(c)[0:2]
+            else:
+                grad += options.weight_decay * parameter.data(c)
+            gradients.append(grad)
+
+    return gradients
+
+
+def reset_embedding_gradients(model, ctx):
+    """Gradients for glove layers of both question and context embeddings doesn't need to be
+    trainer. We train only UNK and EOS embeddings.
+
+    :param BiDAFModel model: Model in training
+    :param ctx: Contexts of training
+    """
+
+    for c in ctx:
+        model.q_embedding._word_embedding.weight.grad(ctx=c)[2:] = 0
+        model.ctx_embedding._word_embedding.weight.grad(ctx=c)[2:] = 0
+
+
+def is_fixed_embedding_layer(name):
+    return True if "predefined_embedding_layer" in name else False
 
 
 def save_model_parameters(net, epoch, options):
@@ -343,7 +421,8 @@ if __name__ == "__main__":
         word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
         ctx = get_context(args)
 
-        evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+        evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
+                                         dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.cast(args.precision)
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
@@ -362,24 +441,20 @@ if __name__ == "__main__":
         dataset = SQuAD(segment='dev')
         mapper = QuestionIdMapper(dataset)
 
-        transformed_dataset = load_transformed_dataset(args.preprocessed_val_dataset_path) \
-            if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path) \
-            else transform_dataset(dataset, vocab_provider, options=args)
-
         if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path):
             transformed_dataset = load_transformed_dataset(args.preprocessed_val_dataset_path)
         else:
             transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
             save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
 
-        val_dataset, val_dataloader = get_record_per_answer_span(transformed_dataset, args)
         word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
         ctx = get_context(args)
 
-        evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+        evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
+                                         dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.load_parameters(model_path, ctx=ctx)
+        net.hybridize(static_alloc=True)
 
         result = evaluator.evaluate_performance(net, ctx, args)
         print("Evaluation results on dev dataset: {}".format(result))
-

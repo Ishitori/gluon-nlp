@@ -60,7 +60,8 @@ class BiDAFEmbedding(HybridBlock):
                 output_size=None
             )
 
-            self._word_embedding = nn.Embedding(input_dim=len(word_vocab),
+            self._word_embedding = nn.Embedding(prefix="predefined_embedding_layer",
+                                                input_dim=len(word_vocab),
                                                 output_dim=embedding_size)
 
             self._highway_network = Highway(2 * embedding_size, num_layers=highway_nlayers)
@@ -72,10 +73,14 @@ class BiDAFEmbedding(HybridBlock):
         super(BiDAFEmbedding, self).initialize(init, ctx, verbose, force_reinit)
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
 
-    def begin_state(self, ctx):
-        state_list = [self._contextual_embedding.begin_state(self._batch_size,
+    def begin_state(self, ctx, batch_sizes=None):
+        if batch_sizes is None:
+            batch_sizes = [self._batch_size] * len(ctx)
+
+        state_list = [self._contextual_embedding.begin_state(b,
                                                              dtype=self._precision,
-                                                             ctx=c) for c in ctx]
+                                                             ctx=c) for c, b in zip(ctx,
+                                                                                    batch_sizes)]
         return state_list
 
     def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
@@ -155,10 +160,14 @@ class BiDAFModelingLayer(HybridBlock):
             self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
                                         bidirectional=biflag, input_size=800)
 
-    def begin_state(self, ctx):
-        state_list = [self._modeling_layer.begin_state(self._batch_size,
+    def begin_state(self, ctx, batch_sizes=None):
+        if batch_sizes is None:
+            batch_sizes = [self._batch_size] * len(ctx)
+
+        state_list = [self._modeling_layer.begin_state(b,
                                                        dtype=self._precision,
-                                                       ctx=c) for c in ctx]
+                                                       ctx=c) for c, b in zip(ctx,
+                                                                              batch_sizes)]
         return state_list
 
     def hybrid_forward(self, F, x, state, *args):
@@ -213,10 +222,14 @@ class BiDAFOutputLayer(HybridBlock):
                                         input_size=2 * span_start_input_dim)
             self._end_index_dense = nn.Dense(units=units, in_units=units * embedding_size)
 
-    def begin_state(self, ctx):
-        state_list = [self._end_index_lstm.begin_state(self._batch_size,
+    def begin_state(self, ctx, batch_sizes=None):
+        if batch_sizes is None:
+            batch_sizes = [self._batch_size] * len(ctx)
+
+        state_list = [self._end_index_lstm.begin_state(b,
                                                        dtype=self._precision,
-                                                       ctx=c) for c in ctx]
+                                                       ctx=c) for c, b in zip(ctx,
+                                                                              batch_sizes)]
         return state_list
 
     def hybrid_forward(self, F, x, m, state, *args):  # pylint: disable=arguments-differ

@@ -19,6 +19,9 @@
 
 # pylint: disable=
 """SQuAD data preprocessing."""
+from gluonnlp.data import SpacyTokenizer
+from scripts.question_answering.tokenizer import BiDAFTokenizer
+
 __all__ = ['SQuADTransform', 'VocabProvider', 'preprocess_dataset']
 
 import re
@@ -58,6 +61,7 @@ class SQuADTransform(object):
     def __init__(self, vocab_provider, question_max_length, context_max_length, max_chars_per_word):
         self._word_vocab = vocab_provider.get_word_level_vocab()
         self._char_vocab = vocab_provider.get_char_level_vocab()
+        self._tokenizer = vocab_provider.get_tokenizer()
 
         self._question_max_length = question_max_length
         self._context_max_length = context_max_length
@@ -71,14 +75,17 @@ class SQuADTransform(object):
         Method converts text into numeric arrays based on Vocabulary.
         Answers are not processed, as they are not needed in input
         """
-        question_words = self._word_vocab[question.split()[:self._question_max_length]]
-        context_words = self._word_vocab[context.split()[:self._context_max_length]]
+        question_tokens = self._tokenizer(question)
+        context_tokens = self._tokenizer(context)
+
+        question_words = self._word_vocab[question_tokens[:self._question_max_length]]
+        context_words = self._word_vocab[context_tokens[:self._context_max_length]]
 
         question_chars = [self._char_vocab[list(iter(word))]
-                          for word in question.split()[:self._question_max_length]]
+                          for word in question_tokens[:self._question_max_length]]
 
         context_chars = [self._char_vocab[list(iter(word))]
-                         for word in context.split()[:self._context_max_length]]
+                         for word in context_tokens[:self._context_max_length]]
 
         question_words_nd = self._pad_to_max_word_length(question_words, self._question_max_length)
         question_chars_nd = self._padder(question_chars)
@@ -89,25 +96,73 @@ class SQuADTransform(object):
         context_chars_nd = self._padder(context_chars)
         context_chars_nd = self._pad_to_max_char_length(context_chars_nd, self._context_max_length)
 
-        answer_spans = SQuADTransform._get_answer_spans(answer_list, answer_start_list)
+        answer_spans = SQuADTransform._get_answer_spans(context, context_tokens, answer_list,
+                                                        answer_start_list)
 
         return (record_index, question_id, question_words_nd, context_words_nd,
                 question_chars_nd, context_chars_nd, answer_spans)
 
     @staticmethod
-    def _get_answer_spans(answer_list, answer_start_list):
-        """Find all answer spans from the context, returning start_index and end_index
+    def _get_answer_spans(context, context_tokens, answer_list, answer_start_list):
+        """Find all answer spans from the context, returning start_index and end_index.
+        Each index is a index of a token
 
+        :param list[str] context_tokens: Tokenized paragraph
         :param list[str] answer_list: List of all answers
-        :param list[int] answer_start_list: List of all answers' start indices
 
         Returns
         -------
         List[Tuple]
             list of Tuple(answer_start_index answer_end_index) per question
         """
-        return [(answer_start_list[i], answer_start_list[i] + len(answer))
-                for i, answer in enumerate(answer_list)]
+        answer_spans = []
+        # SQuAD answers doesn't always match to used tokens in the context. Sometimes there is only
+        # a partial match. We use the same method as used in original implementation:
+        # 1. Find char index range for all tokens of context
+        # 2. Foreach answer
+        #   2.1 Find char index range for the answer (not tokenized)
+        #   2.2 Find Context token indices which char indices contains answer char indices
+        #   2.3. Return first and last token indices
+        context_char_indices = SQuADTransform._get_char_indices(context, context_tokens)
+
+        for answer_start_char_index, answer in zip(answer_start_list, answer_list):
+            answer_token_indices = []
+            answer_end_char_index = answer_start_char_index + len(answer)
+
+            for context_token_index, context_char_span in enumerate(context_char_indices):
+                if not (answer_end_char_index <= context_char_span[0] or
+                        answer_start_char_index >= context_char_span[1]):
+                    answer_token_indices.append(context_token_index)
+
+            if len(answer_token_indices) == 0:
+                print("Warning: Answer {} not found for context {}".format(answer, context))
+            else:
+                answer_span = (answer_token_indices[0],
+                               answer_token_indices[len(answer_token_indices) - 1])
+                answer_spans.append(answer_span)
+
+        if len(answer_spans) == 0:
+            print("Warning: No answers found for context {}".format(context_tokens))
+
+        return answer_spans
+
+    @staticmethod
+    def _get_char_indices(text, text_tokens):
+        """Match token with character indices
+
+        :param str text: Text
+        :param List[str] text_tokens: Tokens of the text
+        :return: List of char_indexes where the order equals to token index
+        """
+        char_indices_per_token = []
+        current_index = 0
+
+        for token in text_tokens:
+            current_index = text.find(token, current_index)
+            char_indices_per_token.append((current_index, current_index + len(token)))
+            current_index += len(token)
+
+        return char_indices_per_token
 
     def _pad_to_max_char_length(self, item, max_item_length):
         """Pads all tokens to maximum size
@@ -154,8 +209,13 @@ class SQuADTransform(object):
 class VocabProvider(object):
     """Provides word level and character level vocabularies
     """
-    def __init__(self, dataset):
+    def __init__(self, dataset, tokenizer=BiDAFTokenizer()):
         self._dataset = dataset
+        self._tokenizer = tokenizer
+
+    def get_tokenizer(self):
+        """Provides tokenizer used to create vocab"""
+        return self._tokenizer
 
     def get_char_level_vocab(self):
         """Provides character level vocabulary
@@ -176,10 +236,7 @@ class VocabProvider(object):
             Word level vocabulary
         """
 
-        def simple_tokenize(source_str, token_delim=' ', seq_delim='\n'):
-            return list(filter(None, re.split(token_delim + '|' + seq_delim, source_str)))
-
-        return VocabProvider._create_squad_vocab(simple_tokenize, self._dataset)
+        return VocabProvider._create_squad_vocab(self._tokenizer, self._dataset)
 
     @staticmethod
     def _create_squad_vocab(tokenization_fn, dataset):

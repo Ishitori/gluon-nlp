@@ -105,7 +105,13 @@ def get_args():
     parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
     parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
+    parser.add_argument('--lr_warmup_steps', type=int, default=1000,
+                        help='Defines how many iterations to spend on warming up learning rate')
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
+    parser.add_argument('--weight_decay', type=float, default=3e-7,
+                        help='Weight decay')
+    parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
+                        help='Weight decay used in exponential moving average')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
     parser.add_argument('--save_dir', type=str, default='out_dir',
@@ -114,10 +120,12 @@ def get_args():
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
                         help='Use float16 or float32 precision')
+    parser.add_argument('--filter_long_context', type=bool, default='True',
+                        help='Filter contexts if the answer is after ctx_max_len')
     parser.add_argument('--save_prediction_path', type=str, default='',
                         help='Path to save predictions')
     parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
-                       help='When using float16, shall optimizer use multiprecision.')
+                        help='When using float16, shall optimizer use multiprecision.')
 
     args = parser.parse_args()
     return args

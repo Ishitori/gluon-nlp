@@ -17,21 +17,25 @@
 # specific language governing permissions and limitations
 # under the License.
 import os
+
 import pytest
 
+import mxnet as mx
 from mxnet import init, nd, autograd
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
-from mxnet.gluon.rnn import LSTM
 from types import SimpleNamespace
 
 import gluonnlp as nlp
 from gluonnlp.data import SQuAD
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
+from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
+from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.similarity_function import DotProductSimilarity
+from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.train_question_answering import get_record_per_answer_span
 
 question_max_length = 30
@@ -279,6 +283,119 @@ def test_bidaf_model():
     nd.waitall()
 
 
+def test_performance_evaluation():
+    options = get_args(batch_size=5)
+
+    train_dataset = SQuAD(segment='train')
+    vocab_provider = VocabProvider(train_dataset)
+
+    dataset = SQuAD(segment='dev')
+    mapper = QuestionIdMapper(dataset)
+
+    transformer = SQuADTransform(vocab_provider, question_max_length,
+                                 context_max_length, max_chars_per_word)
+
+    # for performance reason, process only batch_size # of records
+    transformed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
+                                         if i < options.batch_size])
+
+    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
+    char_vocab = vocab_provider.get_char_level_vocab()
+    model_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(int(options.epochs) - 1))
+
+    ctx = [mx.cpu()]
+    evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
+    net.hybridize(static_alloc=True)
+    net.load_parameters(model_path, ctx=ctx)
+
+    result = evaluator.evaluate_performance(net, ctx, options)
+    print("Evaluation results on dev dataset: {}".format(result))
+
+
+# def test_count_num_of_answer_index_greater_400():
+#     counter_more_400 = 0
+#     counter_less_400 = 0
+#     train_dataset = SQuAD(segment='train')
+#
+#     for item in train_dataset:
+#         for index in item[5]:
+#             if index >= 400:
+#                 counter_more_400 += 1
+#             else:
+#                 counter_less_400 += 1
+#
+#     print("Less {}, More {}".format(counter_less_400, counter_more_400))
+
+
+def test_get_answer_spans_exact_match():
+    tokenizer = BiDAFTokenizer()
+
+    context = "to Saint Bernadette Soubirous in 1858. At the end of the main drive (and in a direct line that connects through 3 statues and the Gold Dome), is a simple, modern stone statue of Mary."
+    context_tokens = tokenizer(context)
+
+    answer_start_index = 3
+    answer = "Saint Bernadette Soubirous"
+
+    result = SQuADTransform._get_answer_spans(context, context_tokens,
+                                              [answer], [answer_start_index])
+
+    assert result == [(1, 3)]
+
+
+def test_get_answer_spans_partial_match():
+    tokenizer = BiDAFTokenizer()
+
+    context = "In addition, trucks will be allowed to enter India's capital only after 11 p.m., two hours later than the existing restriction"
+    context_tokens = tokenizer(context)
+
+    answer_start_index = 72
+    answer = "11 p.m"
+
+    result = SQuADTransform._get_answer_spans(context, context_tokens,
+                                              [answer], [answer_start_index])
+
+    assert result == [(16, 17)]
+
+
+def test_get_answer_spans_unicode():
+    tokenizer = BiDAFTokenizer()
+
+    context = "Back in Warsaw that year, Chopin heard Niccolò Paganini play"
+    context_tokens = tokenizer(context)
+
+    answer_start_index = 39
+    answer = "Niccolò Paganini"
+
+    result = SQuADTransform._get_answer_spans(context, context_tokens,
+                                              [answer], [answer_start_index])
+
+    assert result == [(8, 9)]
+
+
+def test_get_answer_spans_after_comma():
+    tokenizer = BiDAFTokenizer()
+
+    context = "Chopin's successes as a composer and performer opened the door to western Europe for him, and on 2 November 1830, he set out,"
+    context_tokens = tokenizer(context)
+
+    answer_start_index = 108
+    answer = "1830"
+
+    result = SQuADTransform._get_answer_spans(context, context_tokens,
+                                              [answer], [answer_start_index])
+
+    assert result == [(23, 23)]
+
+def test_get_char_indices():
+    context = "to Saint Bernadette Soubirous in 1858. At the end of the main drive (and in a direct line that connects through 3 statues and the Gold Dome), is a simple, modern stone statue of Mary."
+    tokenizer = BiDAFTokenizer()
+    context_tokens = tokenizer(context)
+
+    result = SQuADTransform._get_char_indices(context, context_tokens)
+    assert len(result) == len(context_tokens)
+
 def get_args(batch_size):
     options = SimpleNamespace()
     options.ctx_embedding_num_layers = 2
@@ -293,5 +410,7 @@ def get_args(batch_size):
     options.q_max_len = question_max_length
     options.word_max_len = max_chars_per_word
     options.precision = "float16"
+    options.epochs = 100
+    options.save_dir = "output/"
 
     return options
