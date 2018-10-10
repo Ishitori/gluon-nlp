@@ -87,17 +87,16 @@ class PerformanceEvaluator:
                                            q_embedding_begin_state_list,
                                            m_layer_begin_state_list,
                                            o_layer_begin_state_list):
-                out = net(qw, cw, qc, cc,
-                          ctx_embedding_begin_state,
-                          q_embedding_begin_state,
-                          m_layer_begin_state,
-                          o_layer_begin_state)
-                outs.append(out)
+                begin, end = net(qw, cw, qc, cc,
+                                 ctx_embedding_begin_state,
+                                 q_embedding_begin_state,
+                                 m_layer_begin_state,
+                                 o_layer_begin_state)
+                outs.append((begin, end))
 
             for out in outs:
-                out_per_index = out.transpose(axes=(1, 0, 2))
-                start_indices = PerformanceEvaluator._get_index(out_per_index[0])
-                end_indices = PerformanceEvaluator._get_index(out_per_index[1])
+                start_indices = PerformanceEvaluator._get_index(out[0])
+                end_indices = PerformanceEvaluator._get_index(out[1])
 
                 # iterate over batches
                 for idx, start, end in zip(data[0], start_indices, end_indices):

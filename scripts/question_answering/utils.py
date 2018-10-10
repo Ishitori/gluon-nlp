@@ -125,7 +125,8 @@ def get_args():
     parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
                         help='When using float16, shall optimizer use multiprecision.')
     parser.add_argument('--use_exponential_moving_average', type=bool, default=False,
-                        help='Should averaged copy of parameters been stored.')
+                        help='Should averaged copy of parameters been stored and used '
+                             'during evaluation.')
     parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
                         help='Weight decay used in exponential moving average')
 

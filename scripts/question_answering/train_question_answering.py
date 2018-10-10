@@ -486,8 +486,6 @@ if __name__ == "__main__":
     if args.evaluate:
         print("Running in evaluation mode")
         # we use training dataset to build vocabs
-        model_path = os.path.join(args.save_dir, 'epoch{:d}.params'.format(int(args.epochs) - 1))
-
         train_dataset = SQuAD(segment='train')
         vocab_provider = VocabProvider(train_dataset)
 
@@ -506,7 +504,16 @@ if __name__ == "__main__":
         evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
                                          dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
-        net.load_parameters(model_path, ctx=ctx)
+
+        if args.use_exponential_moving_average:
+            params_path = os.path.join(args.save_dir,
+                                      'ema_epoch{:d}.params'.format(int(args.epochs) - 1))
+            net.collect_params().load(params_path, ctx=ctx)
+        else:
+            params_path = os.path.join(args.save_dir,
+                                      'epoch{:d}.params'.format(int(args.epochs) - 1))
+            net.load_parameters(params_path, ctx=ctx)
+
         net.hybridize(static_alloc=True)
 
         result = evaluator.evaluate_performance(net, ctx, args)
