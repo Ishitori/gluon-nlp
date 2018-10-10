@@ -218,7 +218,7 @@ def combine_tensors(combination, tensors):
     return nd.concat(to_concatenate, dim=-1)
 
 
-def masked_softmax(F, vector, mask):
+def masked_softmax(F, vector, mask, epsilon):
     """
     ``nd.softmax(vector)`` does not work if some elements of ``vector`` should be
     masked.  This performs a softmax on just the non-masked portions of ``vector``.  Passing
@@ -236,7 +236,7 @@ def masked_softmax(F, vector, mask):
         # To limit numerical errors from large vector elements outside the mask, we zero these out.
         result = F.softmax(vector * mask, axis=-1)
         result = result * mask
-        result = F.broadcast_div(result, (result.sum(axis=1, keepdims=True) + 1e-13))
+        result = F.broadcast_div(result, (result.sum(axis=1, keepdims=True) + epsilon))
     return result
 
 
@@ -273,7 +273,8 @@ def _last_dimension_applicator(F,
                                tensor,
                                mask,
                                tensor_shape,
-                               mask_shape):
+                               mask_shape,
+                               **kwargs):
     """
     Takes a tensor with 3 or more dimensions and applies a function over the last dimension.  We
     assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
@@ -289,17 +290,18 @@ def _last_dimension_applicator(F,
             mask = mask.expand_dims(1)
         mask = mask.broadcast_to(shape=tensor_shape)
         mask = mask.reshape(shape=(-1, mask_shape[-1]))
-    reshaped_result = function_to_apply(F, reshaped_tensor, mask)
+    reshaped_result = function_to_apply(F, reshaped_tensor, mask, **kwargs)
     return reshaped_result.reshape(shape=tensor_shape)
 
 
-def last_dim_softmax(F, tensor, mask, tensor_shape, mask_shape):
+def last_dim_softmax(F, tensor, mask, tensor_shape, mask_shape, epsilon):
     """
     Takes a tensor with 3 or more dimensions and does a masked softmax over the last dimension.  We
     assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
     has shape ``(batch_size, sequence_length)``.
     """
-    return _last_dimension_applicator(F, masked_softmax, tensor, mask, tensor_shape, mask_shape)
+    return _last_dimension_applicator(F, masked_softmax, tensor, mask, tensor_shape, mask_shape,
+                                      epsilon=epsilon)
 
 
 def last_dim_log_softmax(F, tensor, mask, tensor_shape, mask_shape):

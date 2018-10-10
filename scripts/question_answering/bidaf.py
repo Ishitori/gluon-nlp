@@ -18,6 +18,7 @@
 # under the License.
 
 from mxnet import gluon
+import numpy as np
 
 from .attention_flow import AttentionFlow
 from .utils import last_dim_softmax, weighted_sum, replace_masked_values, masked_softmax
@@ -36,6 +37,7 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
                  passage_length,
                  question_length,
                  encoding_dim,
+                 precision,
                  **kwargs):
         super(BidirectionalAttentionFlow, self).__init__(**kwargs)
 
@@ -43,9 +45,22 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         self._passage_length = passage_length
         self._question_length = question_length
         self._encoding_dim = encoding_dim
+        self._precision = precision
         self._matrix_attention = AttentionFlow(attention_similarity_function,
                                                batch_size, passage_length, question_length,
                                                encoding_dim)
+
+    def _get_big_negative_value(self):
+        if self._precision == 'float16':
+            return np.finfo(np.float16).min
+        else:
+            return np.finfo(np.float32).min
+
+    def _get_small_positive_value(self):
+        if self._precision == 'float16':
+            return np.finfo(np.float16).eps
+        else:
+            return np.finfo(np.float32).eps
 
     def hybrid_forward(self, F, encoded_passage, encoded_question, question_mask, passage_mask):
         # pylint: disable=arguments-differ
@@ -63,7 +78,8 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
                                                       passage_question_similarity,
                                                       question_mask,
                                                       passage_question_similarity_shape,
-                                                      question_mask_shape)
+                                                      question_mask_shape,
+                                                      epsilon=self._get_small_positive_value())
         # Shape: (batch_size, passage_length, encoding_dim)
         encoded_question_shape = (self._batch_size, self._question_length, self._encoding_dim)
         passage_question_attention_shape = (self._batch_size, self._passage_length,
@@ -78,13 +94,14 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
             replace_masked_values(F,
                                   passage_question_similarity,
                                   question_mask.expand_dims(1),
-                                  -1e7)
+                                  replace_with=self._get_big_negative_value())
 
         # Shape: (batch_size, passage_length)
         question_passage_similarity = masked_similarity.max(axis=-1)
 
         # Shape: (batch_size, passage_length)
-        question_passage_attention = masked_softmax(F, question_passage_similarity, passage_mask)
+        question_passage_attention = masked_softmax(F, question_passage_similarity, passage_mask,
+                                                    epsilon=self._get_small_positive_value())
 
         # Shape: (batch_size, encoding_dim)
         encoded_passage_shape = (self._batch_size, self._passage_length, self._encoding_dim)

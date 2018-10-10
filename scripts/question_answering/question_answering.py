@@ -293,7 +293,8 @@ class BiDAFModel(HybridBlock):
                                                               options.batch_size,
                                                               options.ctx_max_len,
                                                               options.q_max_len,
-                                                              2 * options.embedding_size)
+                                                              2 * options.embedding_size,
+                                                              options.precision)
             self.modeling_layer = BiDAFModelingLayer(options.batch_size,
                                                      input_dim=options.embedding_size,
                                                      nlayers=options.modeling_num_layers,
