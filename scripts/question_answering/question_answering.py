@@ -252,12 +252,13 @@ class BiDAFOutputLayer(HybridBlock):
         # end_index_softmax_output = end_index_dense_output.softmax(axis=1)
         # end_index = F.argmax(end_index_softmax_output, axis=1)
 
+        return start_index_dense_output, end_index_dense_output
         # producing output in shape 2 x batch_size x units
-        output = F.concat(F.expand_dims(start_index_dense_output, axis=0),
-                           F.expand_dims(end_index_dense_output, axis=0), dim=0)
+        # output = F.concat(F.expand_dims(start_index_dense_output, axis=0),
+        #                    F.expand_dims(end_index_dense_output, axis=0), dim=0)
 
         # transposing it to batch_size x 2 x units
-        return F.transpose(output, axes=(1, 0, 2))
+        # return F.transpose(output, axes=(1, 0, 2))
 
 
 class BiDAFModel(HybridBlock):

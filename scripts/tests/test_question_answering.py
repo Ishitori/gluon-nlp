@@ -21,7 +21,7 @@ import os
 import pytest
 
 import mxnet as mx
-from mxnet import init, nd, autograd
+from mxnet import init, nd, autograd, gluon
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
@@ -33,6 +33,7 @@ from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
+from scripts.question_answering.question_answering import TextIndicesLoss
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.similarity_function import DotProductSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
@@ -228,6 +229,7 @@ def test_output_layer():
 
 def test_bidaf_model():
     options = get_args(batch_size=5)
+    ctx = [mx.cpu(0), mx.cpu(1)]
 
     dataset = SQuAD(segment='dev', root='tests/data/squad')
     vocab_provider = VocabProvider(dataset)
@@ -236,7 +238,7 @@ def test_bidaf_model():
 
     # for performance reason, process only batch_size # of records
     processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
-                                       if i < options.batch_size])
+                                       if i < options.batch_size * len(ctx)])
 
     # need to remove question id before feeding the data to data loader
     loadable_data, dataloader = get_record_per_answer_span(processed_dataset, options)
@@ -245,38 +247,60 @@ def test_bidaf_model():
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
     char_vocab = vocab_provider.get_char_level_vocab()
 
-    model = BiDAFModel(word_vocab=word_vocab,
-                       char_vocab=char_vocab,
-                       options=options)
+    net = BiDAFModel(word_vocab=word_vocab,
+                     char_vocab=char_vocab,
+                     options=options)
 
-    model.cast("float16")
-    model.initialize(init.Xavier(magnitude=2.24))
-    model.hybridize(static_alloc=True)
+    #net.cast("float16")
+    net.initialize(init.Xavier(magnitude=2.24))
+    #net.hybridize(static_alloc=True)
 
-    ctx_embedding_begin_state = model.ctx_embedding.begin_state()
-    q_embedding_begin_state = model.q_embedding.begin_state()
-    m_layer_begin_state = model.modeling_layer.begin_state()
-    o_layer_begin_state = model.output_layer.begin_state()
+    ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
+    q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+    m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
+    o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
-    loss_function = SoftmaxCrossEntropyLoss()
-    trainer = Trainer(model.collect_params(), "adadelta", {"learning_rate": 0.5,
-                                                           "multi_precision": True})
+    loss_function = TextIndicesLoss()
+    trainer = Trainer(net.collect_params(), "adadelta", {"learning_rate": 0.5,
+                                                         "multi_precision": True})
 
     for i, (data, label) in enumerate(dataloader):
         record_index, q_words, ctx_words, q_chars, ctx_chars = data
-        q_words = q_words.astype("float16")
-        ctx_words = ctx_words.astype("float16")
-        q_chars = q_chars.astype("float16")
-        ctx_chars = ctx_chars.astype("float16")
-        label = label.astype("float16")
+        # q_words = q_words.astype("float16")
+        # ctx_words = ctx_words.astype("float16")
+        # q_chars = q_chars.astype("float16")
+        # ctx_chars = ctx_chars.astype("float16")
+        # label = label.astype("float16")
 
-        with autograd.record():
-            out = model(record_index, q_words, ctx_words, q_chars, ctx_chars,
-                        ctx_embedding_begin_state, q_embedding_begin_state,
-                        m_layer_begin_state, o_layer_begin_state)
-            loss = loss_function(out, label)
+        record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
+        q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
+        ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
+        q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
+        ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
+        label = gluon.utils.split_and_load(label, ctx, even_split=False)
 
-        loss.backward()
+        losses = []
+
+        for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
+            q_embedding_begin_state, m_layer_begin_state, \
+            o_layer_begin_state in zip(record_index, q_words, ctx_words,
+                                       q_chars, ctx_chars, label,
+                                       ctx_embedding_begin_state_list,
+                                       q_embedding_begin_state_list,
+                                       m_layer_begin_state_list,
+                                       o_layer_begin_state_list):
+            with autograd.record():
+                begin, end = net(qw, cw, qc, cc,
+                                 ctx_embedding_begin_state,
+                                 q_embedding_begin_state,
+                                 m_layer_begin_state,
+                                 o_layer_begin_state)
+                loss = loss_function(begin, end, l)
+                losses.append(loss)
+
+        for loss in losses:
+            loss.backward()
+
         trainer.step(options.batch_size)
         break
 
@@ -388,6 +412,7 @@ def test_get_answer_spans_after_comma():
 
     assert result == [(23, 23)]
 
+
 def test_get_char_indices():
     context = "to Saint Bernadette Soubirous in 1858. At the end of the main drive (and in a direct line that connects through 3 statues and the Gold Dome), is a simple, modern stone statue of Mary."
     tokenizer = BiDAFTokenizer()
@@ -396,8 +421,10 @@ def test_get_char_indices():
     result = SQuADTransform._get_char_indices(context, context_tokens)
     assert len(result) == len(context_tokens)
 
+
 def get_args(batch_size):
     options = SimpleNamespace()
+    options.gpu = None
     options.ctx_embedding_num_layers = 2
     options.embedding_size = 100
     options.dropout = 0.2
@@ -409,8 +436,9 @@ def get_args(batch_size):
     options.ctx_max_len = context_max_length
     options.q_max_len = question_max_length
     options.word_max_len = max_chars_per_word
-    options.precision = "float16"
+    options.precision = "float32"
     options.epochs = 100
     options.save_dir = "output/"
+    options.filter_long_context = False
 
     return options

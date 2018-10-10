@@ -110,8 +110,6 @@ def get_args():
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
     parser.add_argument('--weight_decay', type=float, default=3e-7,
                         help='Weight decay')
-    parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
-                        help='Weight decay used in exponential moving average')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
     parser.add_argument('--save_dir', type=str, default='out_dir',
@@ -126,6 +124,10 @@ def get_args():
                         help='Path to save predictions')
     parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
                         help='When using float16, shall optimizer use multiprecision.')
+    parser.add_argument('--use_exponential_moving_average', type=bool, default=False,
+                        help='Should averaged copy of parameters been stored.')
+    parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
+                        help='Weight decay used in exponential moving average')
 
     args = parser.parse_args()
     return args

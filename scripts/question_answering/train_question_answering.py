@@ -20,6 +20,7 @@ import math
 
 import multiprocessing
 import os
+from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 from os.path import isfile
 
 import logging
@@ -34,12 +35,12 @@ import mxnet as mx
 from mxnet import gluon, init, autograd
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
-from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
 import gluonnlp as nlp
-from gluonnlp.data import SQuAD, SpacyTokenizer
+from gluonnlp.data import SQuAD
 
 from scripts.question_answering.data_processing import VocabProvider, SQuADTransform
+from scripts.question_answering.exponential_moving_average import PolyakAveraging
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
@@ -159,7 +160,8 @@ def get_context(options):
     ctx = []
 
     if options.gpu is None:
-        ctx.append(mx.cpu())
+        ctx.append(mx.cpu(0))
+        ctx.append(mx.cpu(1))
         print('Use CPU')
     else:
         indices = options.gpu.split(',')
@@ -185,14 +187,14 @@ def run_training(net, dataloader, ctx, options):
         Training arguments
     """
 
-    hyperparameters = {'learning_rate': options.lr, 'clip_gradient': options.clip}
+    hyperparameters = {'learning_rate': options.lr}
 
     if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
         hyperparameters["multi_precision"] = True
 
-    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
-                      update_on_kvstore=False)
+    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device")
     loss_function = SoftmaxCrossEntropyLoss()
+    ema = None
 
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
@@ -241,30 +243,61 @@ def run_training(net, dataloader, ctx, options):
                                            m_layer_begin_state_list,
                                            o_layer_begin_state_list):
                 with autograd.record():
-                    o = net(qw, cw, qc, cc,
-                            ctx_embedding_begin_state,
-                            q_embedding_begin_state,
-                            m_layer_begin_state,
-                            o_layer_begin_state)
-                    loss = loss_function(o, l)
+                    begin, end = net(qw, cw, qc, cc,
+                                     ctx_embedding_begin_state,
+                                     q_embedding_begin_state,
+                                     m_layer_begin_state,
+                                     o_layer_begin_state)
+                    begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
+                    loss = loss_function(begin, begin_end[0]) + loss_function(end, begin_end[1])
                     losses.append(loss)
 
-            for l in losses:
-                l.backward()
+            for loss in losses:
+                loss.backward()
 
-            # if iteration == 1:
-            #     for name, param in net.collect_params().items():
-            #         ema.add(name, param.data(CTX[0]))
+            if iteration == 1 and args.use_exponential_moving_average:
+                ema = PolyakAveraging(net.collect_params(),
+                                      args.exponential_moving_average_weight_decay)
+
+            # for loss in losses:
+            #     loss.asnumpy()
+            #
+            # print("Iteration {}.1".format(iteration))
 
             trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
-            trainer.allreduce_grads()
-            # gradients = decay_gradients(net, ctx, options)
-            # gluon.utils.clip_global_norm(gradients, options.clip)
-            reset_embedding_gradients(net, ctx)
-            trainer.update(options.batch_size, ignore_stale_grad=True)
+            trainer.step(options.batch_size)
+            # for loss in losses:
+            #     loss.asnumpy()
+            #
+            # print("Iteration {}.1".format(iteration))
+            # trainer.allreduce_grads()
+            # for loss in losses:
+            #     loss.asnumpy()
+            #
+            # print("Iteration {}.2".format(iteration))
+            #
+            # gradients = decay_gradients(net, ctx[0], options)
+            #
+            # for gradient in gradients:
+            #     gradient.asnumpy()
+            #
+            # print("Iteration {}.3".format(iteration))
+            #
+            # gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
+            # reset_embedding_gradients(net, ctx[0])
+            #
+            # for parameter in net.collect_params():
+            #     grads = parameter.list_grad()
+            #     source = grads[0]
+            #     destination = grads[1:]
+            #
+            #     for dest in destination:
+            #         source.copyto(dest)
+            #
+            # trainer.update(options.batch_size, ignore_stale_grad=True)
 
-            # for name, param in net.collect_params().items():
-            #     ema(name, param.data(CTX[0]))
+            if ema is not None:
+                ema.update()
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
@@ -285,6 +318,7 @@ def run_training(net, dataloader, ctx, options):
                       epoch_time))
 
         save_model_parameters(net, e, options)
+        save_ema_parameters(ema, e, options)
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
 
@@ -310,15 +344,14 @@ def decay_gradients(model, ctx, options):
     """
     gradients = []
 
-    for c in ctx:
-        for name, parameter in model.collect_params().items():
-            grad = parameter.grad(c)
+    for name, parameter in model.collect_params().items():
+        grad = parameter.grad(ctx)
 
-            if is_fixed_embedding_layer(name):
-                grad[0:2] += options.weight_decay * parameter.data(c)[0:2]
-            else:
-                grad += options.weight_decay * parameter.data(c)
-            gradients.append(grad)
+        # if is_fixed_embedding_layer(name):
+        #     grad[0:2] += options.weight_decay * parameter.data(ctx)[0:2]
+        # else:
+        #     grad += options.weight_decay * parameter.data(ctx)
+        gradients.append(grad)
 
     return gradients
 
@@ -330,10 +363,8 @@ def reset_embedding_gradients(model, ctx):
     :param BiDAFModel model: Model in training
     :param ctx: Contexts of training
     """
-
-    for c in ctx:
-        model.q_embedding._word_embedding.weight.grad(ctx=c)[2:] = 0
-        model.ctx_embedding._word_embedding.weight.grad(ctx=c)[2:] = 0
+    model.q_embedding._word_embedding.weight.grad(ctx=ctx)[2:] = 0
+    model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[2:] = 0
 
 
 def is_fixed_embedding_layer(name):
@@ -358,6 +389,28 @@ def save_model_parameters(net, epoch, options):
 
     save_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(epoch))
     net.save_parameters(save_path)
+
+
+def save_ema_parameters(ema, epoch, options):
+    """Save exponentially averaged parameters of the trained model
+
+    Parameters
+    ----------
+    ema : `PolyakAveraging`
+        Model with trained parameters
+    epoch : `int`
+        Number of epoch
+    options : `Namespace`
+        Saving arguments
+    """
+    if ema is None:
+        return
+
+    if not os.path.exists(options.save_dir):
+        os.mkdir(options.save_dir)
+
+    save_path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(epoch))
+    ema.get_params().save(save_path)
 
 
 def save_transformed_dataset(dataset, path):
