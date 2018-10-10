@@ -347,10 +347,10 @@ def decay_gradients(model, ctx, options):
     for name, parameter in model.collect_params().items():
         grad = parameter.grad(ctx)
 
-        # if is_fixed_embedding_layer(name):
-        #     grad[0:2] += options.weight_decay * parameter.data(ctx)[0:2]
-        # else:
-        #     grad += options.weight_decay * parameter.data(ctx)
+        if is_fixed_embedding_layer(name):
+            grad[0:2] += options.weight_decay * parameter.data(ctx)[0:2]
+        else:
+            grad += options.weight_decay * parameter.data(ctx)
         gradients.append(grad)
 
     return gradients
@@ -452,7 +452,7 @@ if __name__ == "__main__":
         print("Running in preprocessing mode")
 
         dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(dataset)
+        vocab_provider = VocabProvider(dataset, args)
         transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
         save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
         exit(0)
@@ -461,7 +461,7 @@ if __name__ == "__main__":
         print("Running in training mode")
 
         dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(dataset)
+        vocab_provider = VocabProvider(dataset, args)
         mapper = QuestionIdMapper(dataset)
 
         if args.preprocessed_dataset_path and isfile(args.preprocessed_dataset_path):
@@ -487,7 +487,7 @@ if __name__ == "__main__":
         print("Running in evaluation mode")
         # we use training dataset to build vocabs
         train_dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(train_dataset)
+        vocab_provider = VocabProvider(train_dataset, args)
 
         dataset = SQuAD(segment='dev')
         mapper = QuestionIdMapper(dataset)

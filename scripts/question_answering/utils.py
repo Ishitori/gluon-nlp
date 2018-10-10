@@ -114,6 +114,10 @@ def get_args():
                         help='report interval')
     parser.add_argument('--save_dir', type=str, default='out_dir',
                         help='directory path to save the final model and training log')
+    parser.add_argument('--word_vocab_path', type=str, default=None,
+                        help='Path to preprocessed word-level vocabulary')
+    parser.add_argument('--char_vocab_path', type=str, default=None,
+                        help='Path to preprocessed character-level vocabulary')
     parser.add_argument('--gpu', type=str, default=None,
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],

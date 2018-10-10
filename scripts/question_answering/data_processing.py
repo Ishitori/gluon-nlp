@@ -19,6 +19,10 @@
 
 # pylint: disable=
 """SQuAD data preprocessing."""
+import pickle
+
+from os.path import isfile
+
 from gluonnlp.data import SpacyTokenizer
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 
@@ -209,8 +213,9 @@ class SQuADTransform(object):
 class VocabProvider(object):
     """Provides word level and character level vocabularies
     """
-    def __init__(self, dataset, tokenizer=BiDAFTokenizer()):
+    def __init__(self, dataset, options, tokenizer=BiDAFTokenizer()):
         self._dataset = dataset
+        self._options = options
         self._tokenizer = tokenizer
 
     def get_tokenizer(self):
@@ -225,7 +230,15 @@ class VocabProvider(object):
         Vocab
             Character level vocabulary
         """
-        return VocabProvider._create_squad_vocab(iter, self._dataset)
+        if self._options.char_vocab_path and isfile(self._options.char_vocab_path):
+            return pickle.load(open(self._options.char_vocab_path, "rb"))
+
+        char_level_vocab = VocabProvider._create_squad_vocab(iter, self._dataset)
+
+        if self._options.char_vocab_path:
+            pickle.dump(char_level_vocab, open(self._options.char_vocab_path, "wb"))
+
+        return char_level_vocab
 
     def get_word_level_vocab(self):
         """Provides word level vocabulary
@@ -236,7 +249,15 @@ class VocabProvider(object):
             Word level vocabulary
         """
 
-        return VocabProvider._create_squad_vocab(self._tokenizer, self._dataset)
+        if self._options.word_vocab_path and isfile(self._options.word_vocab_path):
+            return pickle.load(open(self._options.word_vocab_path, "rb"))
+
+        word_level_vocab = VocabProvider._create_squad_vocab(self._tokenizer, self._dataset)
+
+        if self._options.word_vocab_path:
+            pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
+
+        return word_level_vocab
 
     @staticmethod
     def _create_squad_vocab(tokenization_fn, dataset):
