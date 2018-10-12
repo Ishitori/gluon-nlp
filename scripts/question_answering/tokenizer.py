@@ -39,13 +39,13 @@ class BiDAFTokenizer:
         ret : list of strs
             List of tokens
         """
-        tokens = [token.replace("''", '"').replace("``", '"') for token in
-                  self._base_tokenizer(sample)]
+        sample = sample.replace('\'\'', '\" ').replace(r'``', '\" ')
+        tokens = self._base_tokenizer(sample)
 
         if self._lower_case:
             tokens = [token.lower() for token in tokens]
 
-        tokens = BiDAFTokenizer._process_tokens(tokens)
+        # tokens = BiDAFTokenizer._process_tokens(tokens)
         return tokens
 
     @staticmethod

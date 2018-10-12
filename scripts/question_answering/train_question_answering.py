@@ -36,7 +36,6 @@ from mxnet import gluon, init, autograd
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
 
-import gluonnlp as nlp
 from gluonnlp.data import SQuAD
 
 from scripts.question_answering.data_processing import VocabProvider, SQuADTransform
@@ -70,7 +69,7 @@ def transform_dataset(dataset, vocab_provider, options):
         A tuple of dataset, QuestionIdMapper and original json data for evaluation
     """
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
-                                 options.ctx_max_len, options.word_max_len)
+                                 options.ctx_max_len, options.word_max_len, args.embedding_size)
     processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)])
     return processed_dataset
 
@@ -139,11 +138,7 @@ def get_vocabs(vocab_provider, options):
     data : Tuple
         A tuple of word vocabulary and character vocabulary
     """
-    word_vocab = vocab_provider.get_word_level_vocab()
-
-    word_vocab.set_embedding(
-        nlp.embedding.create('glove', source='glove.6B.{}d'.format(options.embedding_size)))
-
+    word_vocab = vocab_provider.get_word_level_vocab(options.embedding_size)
     char_vocab = vocab_provider.get_char_level_vocab()
     return word_vocab, char_vocab
 
@@ -265,6 +260,12 @@ def run_training(net, dataloader, ctx, options):
             # print("Iteration {}.1".format(iteration))
 
             trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
+
+            for c in ctx:
+                gradients = decay_gradients(net, c, options)
+                gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
+                reset_embedding_gradients(net, c)
+
             trainer.step(options.batch_size)
             # for loss in losses:
             #     loss.asnumpy()
@@ -335,7 +336,8 @@ def get_learning_rate_per_iteration(iteration, options):
 
 
 def decay_gradients(model, ctx, options):
-    """Apply gradient decay to all layers. And only to UNK and EOS embeddings of Glove layers
+    """Apply gradient decay to all layers. For predefined embedding layers, we train only
+    OOV token embeddings
 
     :param BiDAFModel model: Model in training
     :param ctx: Contexts
@@ -347,8 +349,9 @@ def decay_gradients(model, ctx, options):
     for name, parameter in model.collect_params().items():
         grad = parameter.grad(ctx)
 
+        # we train OOV token
         if is_fixed_embedding_layer(name):
-            grad[0:2] += options.weight_decay * parameter.data(ctx)[0:2]
+            grad[0] += options.weight_decay * parameter.data(ctx)[0]
         else:
             grad += options.weight_decay * parameter.data(ctx)
         gradients.append(grad)
@@ -358,13 +361,13 @@ def decay_gradients(model, ctx, options):
 
 def reset_embedding_gradients(model, ctx):
     """Gradients for glove layers of both question and context embeddings doesn't need to be
-    trainer. We train only UNK and EOS embeddings.
+    trainer. We train only OOV token embedding.
 
     :param BiDAFModel model: Model in training
     :param ctx: Contexts of training
     """
-    model.q_embedding._word_embedding.weight.grad(ctx=ctx)[2:] = 0
-    model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[2:] = 0
+    model.q_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
+    model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
 
 
 def is_fixed_embedding_layer(name):
@@ -451,18 +454,26 @@ if __name__ == "__main__":
 
         print("Running in preprocessing mode")
 
-        dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(dataset, args)
-        transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
+        # we use both datasets to create proper vocab
+        dataset_train = SQuAD(segment='train')
+        dataset_dev = SQuAD(segment='dev')
+
+        vocab_provider = VocabProvider([dataset_train, dataset_dev], args)
+        transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=args)
         save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
+
+        if args.preprocessed_val_dataset_path:
+            transformed_dataset = transform_dataset(dataset_dev, vocab_provider, options=args)
+            save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
+
         exit(0)
 
     if args.train:
         print("Running in training mode")
 
         dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(dataset, args)
-        mapper = QuestionIdMapper(dataset)
+        dataset_val = SQuAD(segment='dev')
+        vocab_provider = VocabProvider([dataset, dataset_val], args)
 
         if args.preprocessed_dataset_path and isfile(args.preprocessed_dataset_path):
             transformed_dataset = load_transformed_dataset(args.preprocessed_dataset_path)
@@ -474,22 +485,20 @@ if __name__ == "__main__":
         word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
         ctx = get_context(args)
 
-        evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
-                                         dataset._read_data(), mapper)
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.cast(args.precision)
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
-        net.hybridize(static_alloc=True)
+        net.hybridize()
 
         run_training(net, train_dataloader, ctx, options=args)
 
     if args.evaluate:
         print("Running in evaluation mode")
-        # we use training dataset to build vocabs
-        train_dataset = SQuAD(segment='train')
-        vocab_provider = VocabProvider(train_dataset, args)
 
+        train_dataset = SQuAD(segment='train')
         dataset = SQuAD(segment='dev')
+
+        vocab_provider = VocabProvider([train_dataset, dataset], args)
         mapper = QuestionIdMapper(dataset)
 
         if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path):

@@ -23,7 +23,7 @@ import pickle
 
 from os.path import isfile
 
-from gluonnlp.data import SpacyTokenizer
+import gluonnlp as nlp
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 
 __all__ = ['SQuADTransform', 'VocabProvider', 'preprocess_dataset']
@@ -62,8 +62,9 @@ class SQuADTransform(object):
     """SQuADTransform class responsible for converting text data into NDArrays that can be later
     feed into DataProvider
     """
-    def __init__(self, vocab_provider, question_max_length, context_max_length, max_chars_per_word):
-        self._word_vocab = vocab_provider.get_word_level_vocab()
+    def __init__(self, vocab_provider, question_max_length, context_max_length,
+                 max_chars_per_word, embedding_size):
+        self._word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
         self._char_vocab = vocab_provider.get_char_level_vocab()
         self._tokenizer = vocab_provider.get_tokenizer()
 
@@ -213,8 +214,8 @@ class SQuADTransform(object):
 class VocabProvider(object):
     """Provides word level and character level vocabularies
     """
-    def __init__(self, dataset, options, tokenizer=BiDAFTokenizer()):
-        self._dataset = dataset
+    def __init__(self, datasets, options, tokenizer=BiDAFTokenizer()):
+        self._datasets = datasets
         self._options = options
         self._tokenizer = tokenizer
 
@@ -233,14 +234,18 @@ class VocabProvider(object):
         if self._options.char_vocab_path and isfile(self._options.char_vocab_path):
             return pickle.load(open(self._options.char_vocab_path, "rb"))
 
-        char_level_vocab = VocabProvider._create_squad_vocab(iter, self._dataset)
+        all_chars = []
+        for dataset in self._datasets:
+            all_chars.extend(VocabProvider._get_all_tokens(iter, dataset))
+
+        char_level_vocab = VocabProvider._create_squad_vocab(all_chars)
 
         if self._options.char_vocab_path:
             pickle.dump(char_level_vocab, open(self._options.char_vocab_path, "wb"))
 
         return char_level_vocab
 
-    def get_word_level_vocab(self):
+    def get_word_level_vocab(self, embedding_size):
         """Provides word level vocabulary
 
         Returns
@@ -252,7 +257,13 @@ class VocabProvider(object):
         if self._options.word_vocab_path and isfile(self._options.word_vocab_path):
             return pickle.load(open(self._options.word_vocab_path, "rb"))
 
-        word_level_vocab = VocabProvider._create_squad_vocab(self._tokenizer, self._dataset)
+        all_words = []
+        for dataset in self._datasets:
+            all_words.extend(VocabProvider._get_all_tokens(self._tokenizer, dataset))
+
+        word_level_vocab = VocabProvider._create_squad_vocab(all_words)
+        word_level_vocab.set_embedding(
+            nlp.embedding.create('glove', source='glove.6B.{}d'.format(embedding_size)))
 
         if self._options.word_vocab_path:
             pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
@@ -260,13 +271,17 @@ class VocabProvider(object):
         return word_level_vocab
 
     @staticmethod
-    def _create_squad_vocab(tokenization_fn, dataset):
+    def _create_squad_vocab(all_tokens):
+        counter = data.count_tokens(all_tokens)
+        vocab = Vocab(counter)
+        return vocab
+
+    @staticmethod
+    def _get_all_tokens(tokenization_fn, dataset):
         all_tokens = []
 
         for data_item in dataset:
             all_tokens.extend(tokenization_fn(data_item[2]))
             all_tokens.extend(tokenization_fn(data_item[3]))
 
-        counter = data.count_tokens(all_tokens)
-        vocab = Vocab(counter)
-        return vocab
+        return all_tokens
