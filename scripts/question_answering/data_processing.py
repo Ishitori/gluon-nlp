@@ -38,26 +38,6 @@ from gluonnlp import Vocab, data
 from gluonnlp.data.batchify import Pad
 
 
-def preprocess_dataset(dataset, question_max_length, context_max_length, max_chars_per_word):
-    """Process SQuAD dataset by creating NDArray version of data
-
-    :param Dataset dataset: SQuAD dataset
-    :param int question_max_length: Maximum length of question (padded or trimmed to that size)
-    :param int context_max_length: Maximum length of context (padded or trimmed to that size)
-    :param int max_chars_per_word: Maximum length of word (padded or trimmed to that size)
-
-    Returns
-    -------
-    SimpleDataset
-        Dataset of preprocessed records
-    """
-    vocab_provider = VocabProvider(dataset)
-    transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
-    processed_dataset = SimpleDataset(dataset.trasform(transformer, lazy=False))
-    return processed_dataset
-
-
 class SQuADTransform(object):
     """SQuADTransform class responsible for converting text data into NDArrays that can be later
     feed into DataProvider

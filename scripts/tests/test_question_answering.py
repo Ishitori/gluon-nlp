@@ -33,7 +33,6 @@ from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
-from scripts.question_answering.question_answering import TextIndicesLoss
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.similarity_function import DotProductSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
@@ -260,7 +259,7 @@ def test_bidaf_model():
     m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
     o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
-    loss_function = TextIndicesLoss()
+    loss_function = SoftmaxCrossEntropyLoss()
     trainer = Trainer(net.collect_params(), "adadelta", {"learning_rate": 0.5,
                                                          "multi_precision": True})
 

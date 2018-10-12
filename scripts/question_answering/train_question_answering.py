@@ -187,7 +187,7 @@ def run_training(net, dataloader, ctx, options):
     if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
         hyperparameters["multi_precision"] = True
 
-    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device")
+    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="local")
     loss_function = SoftmaxCrossEntropyLoss()
     ema = None
 
@@ -254,48 +254,22 @@ def run_training(net, dataloader, ctx, options):
                 ema = PolyakAveraging(net.collect_params(),
                                       args.exponential_moving_average_weight_decay)
 
-            # for loss in losses:
-            #     loss.asnumpy()
-            #
-            # print("Iteration {}.1".format(iteration))
-
             trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
+            trainer.allreduce_grads()
 
-            for c in ctx:
-                gradients = decay_gradients(net, c, options)
-                gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
-                reset_embedding_gradients(net, c)
+            gradients = decay_gradients(net, ctx[0], options)
+            gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
+            reset_embedding_gradients(net, ctx[0])
 
-            trainer.step(options.batch_size)
-            # for loss in losses:
-            #     loss.asnumpy()
-            #
-            # print("Iteration {}.1".format(iteration))
-            # trainer.allreduce_grads()
-            # for loss in losses:
-            #     loss.asnumpy()
-            #
-            # print("Iteration {}.2".format(iteration))
-            #
-            # gradients = decay_gradients(net, ctx[0], options)
-            #
-            # for gradient in gradients:
-            #     gradient.asnumpy()
-            #
-            # print("Iteration {}.3".format(iteration))
-            #
-            # gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
-            # reset_embedding_gradients(net, ctx[0])
-            #
-            # for parameter in net.collect_params():
-            #     grads = parameter.list_grad()
-            #     source = grads[0]
-            #     destination = grads[1:]
-            #
-            #     for dest in destination:
-            #         source.copyto(dest)
-            #
-            # trainer.update(options.batch_size, ignore_stale_grad=True)
+            for name, parameter in net.collect_params().items():
+                grads = parameter.list_grad()
+                source = grads[0]
+                destination = grads[1:]
+
+                for dest in destination:
+                    source.copyto(dest)
+
+            trainer.update(len(ctx) * options.batch_size, ignore_stale_grad=True)
 
             if ema is not None:
                 ema.update()
@@ -320,6 +294,7 @@ def run_training(net, dataloader, ctx, options):
 
         save_model_parameters(net, e, options)
         save_ema_parameters(ema, e, options)
+        save_trainer_parameters(trainer, e, options)
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
 
@@ -414,6 +389,28 @@ def save_ema_parameters(ema, epoch, options):
 
     save_path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(epoch))
     ema.get_params().save(save_path)
+
+
+def save_trainer_parameters(trainer, epoch, options):
+    """Save exponentially averaged parameters of the trained model
+
+    Parameters
+    ----------
+    trainer : `Trainer`
+        Trainer
+    epoch : `int`
+        Number of epoch
+    options : `Namespace`
+        Saving arguments
+    """
+    if trainer is None:
+        return
+
+    if not os.path.exists(options.save_dir):
+        os.mkdir(options.save_dir)
+
+    save_path = os.path.join(options.save_dir, 'trainer_epoch{:d}.params'.format(epoch))
+    trainer.save_states(save_path)
 
 
 def save_transformed_dataset(dataset, path):

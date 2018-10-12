@@ -85,22 +85,17 @@ class BiDAFEmbedding(HybridBlock):
 
     def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
         # Changing shape from NTC to TNC as most MXNet blocks work with TNC format natively
-        word_level_data = F.transpose(w, axes=(1, 0))
-        char_level_data = F.transpose(c, axes=(1, 0, 2))
-
         # Get word embeddings. Output is batch_size x seq_len x embedding size (100)
-        word_embedded = self._word_embedding(word_level_data)
+        word_embedded = self._word_embedding(w)
 
         # Get char level embedding in multiple steps:
         # Step 1. Embed into 8-dim vector
-        char_level_data = self._char_dense_embedding(char_level_data)
+        char_level_data = self._char_dense_embedding(c)
 
         # Step 2. Transpose to put seq_len first axis to later iterate over it
         # In that way we can get embedding per token of every batch
-        char_level_data = F.transpose(char_level_data, axes=(0, 2, 1, 3))
+        char_level_data = F.transpose(char_level_data, axes=(1, 2, 0, 3))
 
-        # Step 3. Iterate over tokens of each batch and apply convolutional encoder
-        # As a result of a single iteration, we get token embedding for every batch
         def convolute(token_of_all_batches, _):
             return self._char_conv_embedding(token_of_all_batches), []
 
@@ -114,12 +109,19 @@ class BiDAFEmbedding(HybridBlock):
         #                                             self._batch_size,
         #                                             self._embedding_size))
 
-        # Concat embeddings, making channels size = 200
+        # Transpose to TNC, to join
+        word_embedded = F.transpose(word_embedded, axes=(1, 0, 2))
         highway_input = F.concat(char_embedded, word_embedded, dim=2)
 
-        # Pass through highway, shape remains unchanged
-        highway_output = self._highway_network(highway_input)
+        def highway(token_of_all_batches, _):
+            return self._highway_network(token_of_all_batches), []
 
+        highway_output, _ = F.contrib.foreach(highway, highway_input, [])
+
+        # Pass through highway, shape remains unchanged
+        # highway_output = self._highway_network(highway_input)
+
+        # Transpose to TNC - default for LSTM
         ce_output, ce_state = self._contextual_embedding(highway_output,
                                                          contextual_embedding_state)
         return ce_output
