@@ -189,6 +189,11 @@ def run_training(net, dataloader, ctx, options):
 
     trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
                       update_on_kvstore=False)
+
+    if args.resume_training:
+        path = os.path.join(options.save_dir, 'trainer_epoch{:d}.params'.format(args.resume_training))
+        trainer.load_states(path)
+
     loss_function = SoftmaxCrossEntropyLoss()
     ema = None
 
@@ -197,11 +202,11 @@ def run_training(net, dataloader, ctx, options):
     iteration = 1
     print("Starting training...")
 
-    for e in range(args.epochs):
+    for e in range(0 if not args.resume_training else args.resume_training, args.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
 
         ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-        q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx) # net.q_embedding.begin_state(ctx)
+        q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
         m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
         o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
@@ -254,6 +259,11 @@ def run_training(net, dataloader, ctx, options):
             if iteration == 1 and args.use_exponential_moving_average:
                 ema = PolyakAveraging(net.collect_params(),
                                       args.exponential_moving_average_weight_decay)
+
+                if args.resume_training:
+                    path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(
+                        args.resume_training))
+                    ema.get_params().load(path)
 
             # in special mode we collect gradients and apply processing only after
             # predefined number of grad_req_add_mode which acts like batch_size counter
@@ -508,6 +518,12 @@ if __name__ == "__main__":
 
         if args.grad_req_add_mode:
             net.collect_params().setattr('grad_req', 'add')
+
+        if args.resume_training:
+            print("Resuming training from {} epoch".format(args.resume_training))
+            params_path = os.path.join(args.save_dir,
+                                       'epoch{:d}.params'.format(int(args.resume_training) - 1))
+            net.load_parameters(params_path, ctx)
 
         run_training(net, train_dataloader, ctx, options=args)
 

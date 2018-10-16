@@ -103,6 +103,7 @@ def get_args():
     parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
     parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
     parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
+    parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
     parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
     parser.add_argument('--lr_warmup_steps', type=int, default=1000,

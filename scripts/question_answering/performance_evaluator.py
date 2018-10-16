@@ -50,6 +50,14 @@ class PerformanceEvaluator:
         """
 
         pred = {}
+
+        # Allows to ensure that start index is always <= than end index
+        for c in ctx:
+            answer_mask_matrix = nd.zeros(shape=(1, options.ctx_max_len, options.ctx_max_len), ctx=c)
+            for idx in range(options.answer_max_len):
+                answer_mask_matrix += nd.eye(N=options.ctx_max_len, M=options.ctx_max_len,
+                                             k=idx, ctx=c)
+
         eval_dataset = ArrayDataset([(self._mapper.question_id_to_idx[r[1]], r[2], r[3], r[4], r[5])
                         for r in self._evaluation_dataset])
         eval_dataloader = DataLoader(eval_dataset, batch_size=options.batch_size,
@@ -94,14 +102,15 @@ class PerformanceEvaluator:
                 outs.append((begin, end))
 
             for out in outs:
-                start_indices = PerformanceEvaluator._get_index(out[0])
-                end_indices = PerformanceEvaluator._get_index(out[1])
+                start = out[0].softmax(axis=1)
+                end = out[1].softmax(axis=1)
+                start_end_span = PerformanceEvaluator._get_indices(start, end, answer_mask_matrix)
 
                 # iterate over batches
-                for idx, start, end in zip(data[0], start_indices, end_indices):
+                for idx, start_end in zip(data[0], start_end_span):
                     idx = int(idx.asscalar())
-                    start = int(start.asscalar())
-                    end = int(end.asscalar())
+                    start = int(start_end[0].asscalar())
+                    end = int(start_end[1].asscalar())
                     question_id = self._mapper.idx_to_question_id[idx]
                     pred[question_id] = (start, end, self.get_text_result(idx, (start, end)))
 
@@ -150,19 +159,25 @@ class PerformanceEvaluator:
         return text
 
     @staticmethod
-    def _get_index(prediction):
-        """Convert prediction to actual index in text
+    def _get_indices(begin, end, answer_mask_matrix):
+        r"""Select the begin and end position of answer span.
+
+            At inference time, the predicted span (s, e) is chosen such that
+            begin_hat[s] * end_hat[e] is maximized and s ≤ e.
 
         Parameters
         ----------
-        prediction : `NDArray`
-            Output of the network
-
-        Returns
-        -------
-        indices : `NDArray`
-            Indices of a word in context for whole batch
+        begin : NDArray
+            input tensor with shape `(batch_size, context_sequence_length)`
+        end : NDArray
+            input tensor with shape `(batch_size, context_sequence_length)`
         """
-        indices_softmax_output = prediction.softmax(axis=1)
-        indices = nd.argmax(indices_softmax_output, axis=1)
-        return indices
+        begin_hat = begin.reshape(begin.shape + (1,))
+        end_hat = end.reshape(end.shape + (1,))
+        end_hat = end_hat.transpose(axes=(0, 2, 1))
+
+        result = nd.batch_dot(begin_hat, end_hat) * answer_mask_matrix.slice(
+            begin=(0, 0, 0), end=(1, begin_hat.shape[1], begin_hat.shape[1]))
+        yp1 = result.max(axis=2).argmax(axis=1, keepdims=True).astype('int32')
+        yp2 = result.max(axis=1).argmax(axis=1, keepdims=True).astype('int32')
+        return nd.concat(yp1, yp2, dim=-1)
