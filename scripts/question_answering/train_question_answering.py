@@ -187,7 +187,8 @@ def run_training(net, dataloader, ctx, options):
     if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
         hyperparameters["multi_precision"] = True
 
-    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="local")
+    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
+                      update_on_kvstore=False)
     loss_function = SoftmaxCrossEntropyLoss()
     ema = None
 
@@ -200,7 +201,7 @@ def run_training(net, dataloader, ctx, options):
         avg_loss *= 0  # Zero average loss of each epoch
 
         ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-        q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+        q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx) # net.q_embedding.begin_state(ctx)
         m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
         o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
@@ -254,11 +255,19 @@ def run_training(net, dataloader, ctx, options):
                 ema = PolyakAveraging(net.collect_params(),
                                       args.exponential_moving_average_weight_decay)
 
+            # in special mode we collect gradients and apply processing only after
+            # predefined number of grad_req_add_mode which acts like batch_size counter
+            if options.grad_req_add_mode > 0:
+                if not iteration % options.grad_req_add_mode != 0 and \
+                       iteration != len(dataloader):
+                    iteration += 1
+                    continue
+
             trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
             trainer.allreduce_grads()
 
             gradients = decay_gradients(net, ctx[0], options)
-            gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=False)
+            gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=True)
             reset_embedding_gradients(net, ctx[0])
 
             for name, parameter in net.collect_params().items():
@@ -269,7 +278,10 @@ def run_training(net, dataloader, ctx, options):
                 for dest in destination:
                     source.copyto(dest)
 
-            trainer.update(len(ctx) * options.batch_size, ignore_stale_grad=True)
+            scailing_coeff = len(ctx) * options.batch_size \
+                if options.grad_req_add_mode == 0 else options.grad_req_add_mode
+
+            trainer.update(scailing_coeff, ignore_stale_grad=True)
 
             if ema is not None:
                 ema.update()
@@ -341,7 +353,7 @@ def reset_embedding_gradients(model, ctx):
     :param BiDAFModel model: Model in training
     :param ctx: Contexts of training
     """
-    model.q_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
+    # model.q_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
     model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
 
 
@@ -485,7 +497,17 @@ if __name__ == "__main__":
         net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
         net.cast(args.precision)
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
-        net.hybridize()
+        net.hybridize(static_alloc=True)
+
+        # total_params = sum(
+        #     v.data().shape[0] if len(v.data().shape) == 1 else v.data().shape[1]
+        #     if v.data().shape[0] == 0 else v.data().shape[0] if
+        #     v.data().shape[1] == 0 else v.data().shape[0] * v.data().shape[1]
+        #     for k, v in net.ctx_embedding._word_embedding.collect_params().items())
+        # print('number of params: %d' % total_params)
+
+        if args.grad_req_add_mode:
+            net.collect_params().setattr('grad_req', 'add')
 
         run_training(net, train_dataloader, ctx, options=args)
 

@@ -133,9 +133,16 @@ def get_args():
                              'during evaluation.')
     parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
                         help='Weight decay used in exponential moving average')
+    parser.add_argument('--grad_req_add_mode', type=int, default=0,
+                        help='Enable rolling gradient mode, where batch size is always 1 and '
+                             'gradients are accumulated using single GPU')
 
     args = parser.parse_args()
     return args
+
+
+def get_very_negative_number():
+    return -1e30
 
 
 def get_combined_dim(combination, tensor_dims):

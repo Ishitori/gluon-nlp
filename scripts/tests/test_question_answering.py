@@ -38,6 +38,7 @@ from scripts.question_answering.similarity_function import DotProductSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.train_question_answering import get_record_per_answer_span
 
+batch_size = 5
 question_max_length = 30
 context_max_length = 400
 max_chars_per_word = 16
@@ -47,9 +48,9 @@ embedding_size = 100
 @pytest.mark.serial
 def test_transform_to_nd_array():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset)
+    vocab_provider = VocabProvider(dataset, get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
+                                 context_max_length, max_chars_per_word, embedding_size)
     record = dataset[0]
 
     transformed_record = transformer(*record)
@@ -60,9 +61,9 @@ def test_transform_to_nd_array():
 @pytest.mark.serial
 def test_data_loader_able_to_read():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset)
+    vocab_provider = VocabProvider(dataset, get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
+                                 context_max_length, max_chars_per_word, embedding_size)
     record = dataset[0]
 
     processed_dataset = SimpleDataset([transformer(*record)])
@@ -83,19 +84,17 @@ def test_data_loader_able_to_read():
 @pytest.mark.serial
 def test_load_vocabs():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset)
+    vocab_provider = VocabProvider(dataset, get_args(batch_size))
 
-    assert vocab_provider.get_word_level_vocab() is not None
+    assert vocab_provider.get_word_level_vocab(embedding_size) is not None
     assert vocab_provider.get_char_level_vocab() is not None
 
 
 def test_bidaf_embedding():
-    batch_size = 5
-
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset)
+    vocab_provider = VocabProvider(dataset, get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
+                                 context_max_length, max_chars_per_word, embedding_size)
 
     # for performance reason, process only batch_size # of records
     processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
@@ -104,7 +103,7 @@ def test_bidaf_embedding():
     # need to remove question id before feeding the data to data loader
     loadable_data, dataloader = get_record_per_answer_span(processed_dataset, get_args(batch_size))
 
-    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
     char_vocab = vocab_provider.get_char_level_vocab()
 
@@ -116,7 +115,7 @@ def test_bidaf_embedding():
     embedding.cast("float16")
     embedding.initialize(init.Xavier(magnitude=2.24))
     embedding.hybridize(static_alloc=True)
-    state = embedding.begin_state()
+    state = embedding.begin_state(mx.cpu())
 
     trainer = Trainer(embedding.collect_params(), "sgd", {"learning_rate": 0.1,
                                                           "multi_precision": True})
@@ -139,8 +138,6 @@ def test_bidaf_embedding():
 
 
 def test_attention_layer():
-    batch_size = 5
-
     ctx_fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 2 * embedding_size),
                                       dtype="float16")
 
@@ -154,7 +151,8 @@ def test_attention_layer():
                                        batch_size,
                                        context_max_length,
                                        question_max_length,
-                                       2 * embedding_size)
+                                       2 * embedding_size,
+                                       "float16")
 
     layer.cast("float16")
     layer.initialize()
@@ -167,8 +165,6 @@ def test_attention_layer():
 
 
 def test_modeling_layer():
-    batch_size = 5
-
     # The modeling layer receive input in a shape of batch_size x T x 8d
     # T is the sequence length of context which is context_max_length
     # d is the size of embedding, which is embedding_size
@@ -181,7 +177,7 @@ def test_modeling_layer():
     layer.cast("float16")
     layer.initialize()
     layer.hybridize(static_alloc=True)
-    state = layer.begin_state()
+    state = layer.begin_state(mx.cpu())
 
     trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": "0.1",
                                                       "multi_precision": True})
@@ -195,8 +191,6 @@ def test_modeling_layer():
 
 
 def test_output_layer():
-    batch_size = 5
-
     # The output layer receive 2 inputs: the output of Modeling layer (context_max_length,
     # batch_size, 2 * embedding_size) and the output of Attention flow layer
     # (batch_size, context_max_length, 8 * embedding_size)
@@ -213,7 +207,7 @@ def test_output_layer():
     # The model doesn't need to know the hidden states, so I don't hold variables for the states
     layer.initialize()
     layer.hybridize(static_alloc=True)
-    state = layer.begin_state()
+    state = layer.begin_state(mx.cpu())
 
     trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": 0.1,
                                                       "multi_precision": True})
@@ -227,13 +221,13 @@ def test_output_layer():
 
 
 def test_bidaf_model():
-    options = get_args(batch_size=5)
+    options = get_args(batch_size)
     ctx = [mx.cpu(0), mx.cpu(1)]
 
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset)
+    vocab_provider = VocabProvider(dataset, options)
     transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
+                                 context_max_length, max_chars_per_word, embedding_size)
 
     # for performance reason, process only batch_size # of records
     processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
@@ -242,7 +236,7 @@ def test_bidaf_model():
     # need to remove question id before feeding the data to data loader
     loadable_data, dataloader = get_record_per_answer_span(processed_dataset, options)
 
-    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
     char_vocab = vocab_provider.get_char_level_vocab()
 
@@ -250,12 +244,12 @@ def test_bidaf_model():
                      char_vocab=char_vocab,
                      options=options)
 
-    #net.cast("float16")
+    net.cast("float16")
     net.initialize(init.Xavier(magnitude=2.24))
-    #net.hybridize(static_alloc=True)
+    net.hybridize(static_alloc=True)
 
     ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-    q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+    q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
     m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
     o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 
@@ -265,11 +259,11 @@ def test_bidaf_model():
 
     for i, (data, label) in enumerate(dataloader):
         record_index, q_words, ctx_words, q_chars, ctx_chars = data
-        # q_words = q_words.astype("float16")
-        # ctx_words = ctx_words.astype("float16")
-        # q_chars = q_chars.astype("float16")
-        # ctx_chars = ctx_chars.astype("float16")
-        # label = label.astype("float16")
+        q_words = q_words.astype("float16")
+        ctx_words = ctx_words.astype("float16")
+        q_chars = q_chars.astype("float16")
+        ctx_chars = ctx_chars.astype("float16")
+        label = label.astype("float16")
 
         record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
         q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
@@ -307,49 +301,35 @@ def test_bidaf_model():
 
 
 def test_performance_evaluation():
-    options = get_args(batch_size=5)
+    options = get_args(batch_size)
 
     train_dataset = SQuAD(segment='train')
-    vocab_provider = VocabProvider(train_dataset)
+    vocab_provider = VocabProvider(train_dataset, options)
 
     dataset = SQuAD(segment='dev')
     mapper = QuestionIdMapper(dataset)
 
     transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word)
+                                 context_max_length, max_chars_per_word, embedding_size)
 
     # for performance reason, process only batch_size # of records
     transformed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
                                          if i < options.batch_size])
 
-    word_vocab = vocab_provider.get_word_level_vocab()
+    word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
     char_vocab = vocab_provider.get_char_level_vocab()
     model_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(int(options.epochs) - 1))
 
     ctx = [mx.cpu()]
-    evaluator = PerformanceEvaluator(transformed_dataset, dataset._read_data(), mapper)
+    evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
+                                     dataset._read_data(), mapper)
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
     net.hybridize(static_alloc=True)
     net.load_parameters(model_path, ctx=ctx)
 
     result = evaluator.evaluate_performance(net, ctx, options)
     print("Evaluation results on dev dataset: {}".format(result))
-
-
-# def test_count_num_of_answer_index_greater_400():
-#     counter_more_400 = 0
-#     counter_less_400 = 0
-#     train_dataset = SQuAD(segment='train')
-#
-#     for item in train_dataset:
-#         for index in item[5]:
-#             if index >= 400:
-#                 counter_more_400 += 1
-#             else:
-#                 counter_less_400 += 1
-#
-#     print("Less {}, More {}".format(counter_less_400, counter_more_400))
 
 
 def test_get_answer_spans_exact_match():
@@ -436,7 +416,7 @@ def get_args(batch_size):
     options.q_max_len = question_max_length
     options.word_max_len = max_chars_per_word
     options.precision = "float32"
-    options.epochs = 100
+    options.epochs = 12
     options.save_dir = "output/"
     options.filter_long_context = False
 

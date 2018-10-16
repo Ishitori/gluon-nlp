@@ -19,10 +19,9 @@
 
 """Performance evaluator - a proxy class used for plugging in official validation script"""
 import multiprocessing
-import re
 from mxnet import nd, gluon
 from mxnet.gluon.data import DataLoader, ArrayDataset
-from scripts.question_answering.metric import evaluate
+from scripts.question_answering.official_squad_eval_script import evaluate
 
 
 class PerformanceEvaluator:
@@ -73,7 +72,7 @@ class PerformanceEvaluator:
             ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
 
             ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-            q_embedding_begin_state_list = net.q_embedding.begin_state(ctx)
+            q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
             m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
             o_layer_begin_state_list = net.output_layer.begin_state(ctx)
 

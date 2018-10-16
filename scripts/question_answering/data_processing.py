@@ -26,13 +26,11 @@ from os.path import isfile
 import gluonnlp as nlp
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 
-__all__ = ['SQuADTransform', 'VocabProvider', 'preprocess_dataset']
+__all__ = ['SQuADTransform', 'VocabProvider']
 
-import re
 import numpy as np
 
 from mxnet import nd
-from mxnet.gluon.data import SimpleDataset
 
 from gluonnlp import Vocab, data
 from gluonnlp.data.batchify import Pad

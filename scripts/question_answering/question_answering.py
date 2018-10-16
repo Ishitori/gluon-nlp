@@ -20,6 +20,7 @@
 """BiDAF model blocks"""
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.similarity_function import DotProductSimilarity
+from scripts.question_answering.utils import get_very_negative_number
 
 __all__ = ['BiDAFEmbedding', 'BiDAFModelingLayer', 'BiDAFOutputLayer', 'BiDAFModel']
 
@@ -207,22 +208,23 @@ class BiDAFOutputLayer(HybridBlock):
     params : `ParameterDict` or `None`
         Shared Parameters for this `Block`.
     """
-    def __init__(self, batch_size, span_start_input_dim=100, units=None, nlayers=1, biflag=True,
+    def __init__(self, batch_size, span_start_input_dim=100, in_units=None, nlayers=1, biflag=True,
                  dropout=0.2, precision='float32', prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
-        units = 4 * span_start_input_dim if units is None else units
-        embedding_size = 1000
-
+        in_units = 10 * span_start_input_dim if in_units is None else in_units
         self._batch_size = batch_size
         self._precision = precision
 
         with self.name_scope():
-            self._start_index_dense = nn.Dense(units=units, in_units=units * embedding_size)
+            self._dropout = nn.Dropout(rate=dropout)
+            self._start_index_dense = nn.Dense(units=1, in_units=in_units,
+                                               use_bias=False, flatten=False)
             self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
                                         num_layers=nlayers, dropout=dropout, bidirectional=biflag,
                                         input_size=2 * span_start_input_dim)
-            self._end_index_dense = nn.Dense(units=units, in_units=units * embedding_size)
+            self._end_index_dense = nn.Dense(units=1, in_units=in_units,
+                                             use_bias=False, flatten=False)
 
     def begin_state(self, ctx, batch_sizes=None):
         if batch_sizes is None:
@@ -234,18 +236,28 @@ class BiDAFOutputLayer(HybridBlock):
                                                                               batch_sizes)]
         return state_list
 
-    def hybrid_forward(self, F, x, m, state, *args):  # pylint: disable=arguments-differ
+    def hybrid_forward(self, F, x, m, mask, state, *args):  # pylint: disable=arguments-differ
 
         # setting batch size as the first dimension
         start_index_input = F.transpose(F.concat(x, m, dim=2), axes=(1, 0, 2))
+        start_index_input = self._dropout(start_index_input)
+
         start_index_dense_output = self._start_index_dense(start_index_input)
 
         end_index_input_part, _ = self._end_index_lstm(m, state)
         end_index_input = F.transpose(F.concat(x, end_index_input_part, dim=2),
-                                       axes=(1, 0, 2))
+                                      axes=(1, 0, 2))
 
+        end_index_input = self._dropout(end_index_input)
         end_index_dense_output = self._end_index_dense(end_index_input)
 
+        start_index_dense_output = F.squeeze(start_index_dense_output)
+        start_index_dense_output_masked = start_index_dense_output + ((1 - mask) *
+                                                                      get_very_negative_number())
+
+        end_index_dense_output = F.squeeze(end_index_dense_output)
+        end_index_dense_output_masked = end_index_dense_output + ((1 - mask) *
+                                                                  get_very_negative_number())
         # Don't need to apply softmax for training, but do need for prediction
         # Maybe should use autograd properties to check it
         # Will need to reuse it to actually make predictions
@@ -254,7 +266,8 @@ class BiDAFOutputLayer(HybridBlock):
         # end_index_softmax_output = end_index_dense_output.softmax(axis=1)
         # end_index = F.argmax(end_index_softmax_output, axis=1)
 
-        return start_index_dense_output, end_index_dense_output
+        return start_index_dense_output_masked, \
+               end_index_dense_output_masked
         # producing output in shape 2 x batch_size x units
         # output = F.concat(F.expand_dims(start_index_dense_output, axis=0),
         #                    F.expand_dims(end_index_dense_output, axis=0), dim=0)
@@ -280,15 +293,15 @@ class BiDAFModel(HybridBlock):
                                                 options.embedding_size,
                                                 precision=options.precision,
                                                 prefix="context_embedding")
-            self.q_embedding = BiDAFEmbedding(options.batch_size,
-                                              word_vocab,
-                                              char_vocab,
-                                              options.q_max_len,
-                                              options.ctx_embedding_num_layers,
-                                              options.highway_num_layers,
-                                              options.embedding_size,
-                                              precision=options.precision,
-                                              prefix="question_embedding")
+            # self.q_embedding = BiDAFEmbedding(options.batch_size,
+            #                                   word_vocab,
+            #                                   char_vocab,
+            #                                   options.q_max_len,
+            #                                   options.ctx_embedding_num_layers,
+            #                                   options.highway_num_layers,
+            #                                   options.embedding_size,
+            #                                   precision=options.precision,
+            #                                   prefix="question_embedding")
 
             # we multiple embedding_size by 2 because we use bidirectional embedding
             self.attention_layer = BidirectionalAttentionFlow(DotProductSimilarity(),
@@ -315,7 +328,8 @@ class BiDAFModel(HybridBlock):
                        output_layer_states=None,
                        *args):
         ctx_embedding_output = self.ctx_embedding(cw, cc, ctx_embedding_states)
-        q_embedding_output = self.q_embedding(qw, qc, q_embedding_states)
+        q_embedding_output = self.ctx_embedding(qw, qc, q_embedding_states)
+        # self.q_embedding(qw, qc, q_embedding_states)
 
         # attention layer expect batch_size x seq_length x channels
         ctx_embedding_output = F.transpose(ctx_embedding_output, axes=(1, 0, 2))
@@ -334,7 +348,7 @@ class BiDAFModel(HybridBlock):
         # modeling layer expects seq_length x batch_size x channels
         modeling_layer_output = self.modeling_layer(attention_layer_output, modeling_layer_states)
 
-        output = self.output_layer(attention_layer_output, modeling_layer_output,
+        output = self.output_layer(attention_layer_output, modeling_layer_output, ctx_mask,
                                    output_layer_states)
 
         return output
