@@ -191,7 +191,8 @@ def run_training(net, dataloader, ctx, options):
                       update_on_kvstore=False)
 
     if args.resume_training:
-        path = os.path.join(options.save_dir, 'trainer_epoch{:d}.params'.format(args.resume_training))
+        path = os.path.join(options.save_dir,
+                            'trainer_epoch{:d}.params'.format(args.resume_training - 1))
         trainer.load_states(path)
 
     loss_function = SoftmaxCrossEntropyLoss()
@@ -232,7 +233,6 @@ def run_training(net, dataloader, ctx, options):
             label = gluon.utils.split_and_load(label, ctx, even_split=False)
 
             # Wait for completion of previous iteration to avoid unnecessary memory allocation
-            mx.nd.waitall()
             losses = []
 
             for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
@@ -250,7 +250,8 @@ def run_training(net, dataloader, ctx, options):
                                      m_layer_begin_state,
                                      o_layer_begin_state)
                     begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
-                    loss = loss_function(begin, begin_end[0]) + loss_function(end, begin_end[1])
+                    loss = loss_function(begin, begin_end[0]).mean() + \
+                           loss_function(end, begin_end[1]).mean()
                     losses.append(loss)
 
             for loss in losses:
@@ -262,7 +263,7 @@ def run_training(net, dataloader, ctx, options):
 
                 if args.resume_training:
                     path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(
-                        args.resume_training))
+                        args.resume_training - 1))
                     ema.get_params().load(path)
 
             # in special mode we collect gradients and apply processing only after
@@ -329,6 +330,10 @@ def get_learning_rate_per_iteration(iteration, options):
     :param NameSpace options: Training options
     :return float: learning rate
     """
+
+    if options.resume_training:
+        return options.lr
+
     return min(options.lr, options.lr * (math.log(iteration) / math.log(options.lr_warmup_steps)))
 
 

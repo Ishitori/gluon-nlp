@@ -113,6 +113,8 @@ def get_args():
                         help='Weight decay')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
+    parser.add_argument('--resume_training', type=int, default=0,
+                        help='Resume training from this epoch number')
     parser.add_argument('--save_dir', type=str, default='out_dir',
                         help='directory path to save the final model and training log')
     parser.add_argument('--word_vocab_path', type=str, default=None,
