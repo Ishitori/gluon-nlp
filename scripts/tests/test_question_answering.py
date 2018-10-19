@@ -22,7 +22,7 @@ import pytest
 
 import mxnet as mx
 from mxnet import init, nd, autograd, gluon
-from mxnet.gluon import Trainer
+from mxnet.gluon import Trainer, nn
 from mxnet.gluon.data import DataLoader, SimpleDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 from types import SimpleNamespace
@@ -31,6 +31,7 @@ import gluonnlp as nlp
 from gluonnlp.data import SQuAD
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
+from scripts.question_answering.exponential_moving_average import PolyakAveraging
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
@@ -400,6 +401,31 @@ def test_get_char_indices():
     result = SQuADTransform._get_char_indices(context, context_tokens)
     assert len(result) == len(context_tokens)
 
+
+def test_polyak_averaging():
+    net = nn.HybridSequential()
+    net.add(nn.Dense(5), nn.Dense(3), nn.Dense(2))
+    net.initialize(init.Xavier())
+    # net.hybridize()
+
+    ema = None
+    loss_fn = SoftmaxCrossEntropyLoss()
+    trainer = Trainer(net.collect_params(), "sgd", {"learning_rate": 0.5})
+
+    train_data = mx.random.uniform(-0.1, 0.1, shape=(5, 10))
+    train_label = mx.nd.array([0, 1, 1, 0, 1])
+
+    for i in range(3):
+        with autograd.record():
+            o = net(train_data)
+            loss = loss_fn(o, train_label)
+
+        if i == 0:
+            ema = PolyakAveraging(net.collect_params(), decay=0.999)
+
+        loss.backward()
+        trainer.step(5)
+        ema.update()
 
 def get_args(batch_size):
     options = SimpleNamespace()

@@ -58,16 +58,16 @@ class SQuADTransform(object):
         Method converts text into numeric arrays based on Vocabulary.
         Answers are not processed, as they are not needed in input
         """
-        question_tokens = self._tokenizer(question)
-        context_tokens = self._tokenizer(context)
+        question_tokens = self._tokenizer(question, lower_case=True)
+        context_tokens = self._tokenizer(context, lower_case=True)
 
         question_words = self._word_vocab[question_tokens[:self._question_max_length]]
         context_words = self._word_vocab[context_tokens[:self._context_max_length]]
 
-        question_chars = [self._char_vocab[list(iter(word))]
+        question_chars = [self._char_vocab[[character.lower() for character in word]]
                           for word in question_tokens[:self._question_max_length]]
 
-        context_chars = [self._char_vocab[list(iter(word))]
+        context_chars = [self._char_vocab[[character.lower() for character in word]]
                          for word in context_tokens[:self._context_max_length]]
 
         question_words_nd = self._pad_to_max_word_length(question_words, self._question_max_length)
@@ -139,9 +139,10 @@ class SQuADTransform(object):
         """
         char_indices_per_token = []
         current_index = 0
+        text_lowered = text.lower()
 
         for token in text_tokens:
-            current_index = text.find(token, current_index)
+            current_index = text_lowered.find(token, current_index)
             char_indices_per_token.append((current_index, current_index + len(token)))
             current_index += len(token)
 
@@ -214,7 +215,7 @@ class VocabProvider(object):
 
         all_chars = []
         for dataset in self._datasets:
-            all_chars.extend(VocabProvider._get_all_tokens(iter, dataset))
+            all_chars.extend(self._get_all_char_tokens(dataset))
 
         char_level_vocab = VocabProvider._create_squad_vocab(all_chars)
 
@@ -237,11 +238,24 @@ class VocabProvider(object):
 
         all_words = []
         for dataset in self._datasets:
-            all_words.extend(VocabProvider._get_all_tokens(self._tokenizer, dataset))
+            all_words.extend(self._get_all_word_tokens(dataset))
 
         word_level_vocab = VocabProvider._create_squad_vocab(all_words)
         word_level_vocab.set_embedding(
             nlp.embedding.create('glove', source='glove.6B.{}d'.format(embedding_size)))
+
+        count = 0
+        count2 = 0
+        for i in range(len(word_level_vocab)):
+            if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
+                count += 1
+            else:
+                if count2 < 50:
+                    print(word_level_vocab.embedding.idx_to_token[i])
+                    count2 += 1
+
+        print("word_level_vocab {}, word_level_vocab.set_embedding {}".format(
+            len(word_level_vocab), count))
 
         if self._options.word_vocab_path:
             pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
@@ -254,12 +268,23 @@ class VocabProvider(object):
         vocab = Vocab(counter)
         return vocab
 
-    @staticmethod
-    def _get_all_tokens(tokenization_fn, dataset):
+    def _get_all_word_tokens(self, dataset):
         all_tokens = []
 
         for data_item in dataset:
-            all_tokens.extend(tokenization_fn(data_item[2]))
-            all_tokens.extend(tokenization_fn(data_item[3]))
+            all_tokens.extend(self._tokenizer(data_item[2], lower_case=True))
+            all_tokens.extend(self._tokenizer(data_item[3], lower_case=True))
+
+        return all_tokens
+
+    def _get_all_char_tokens(self, dataset):
+        all_tokens = []
+
+        for data_item in dataset:
+            for character in data_item[2]:
+                all_tokens.extend(character.lower())
+
+            for character in data_item[3]:
+                all_tokens.extend(character.lower())
 
         return all_tokens

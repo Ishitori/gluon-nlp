@@ -187,6 +187,9 @@ def run_training(net, dataloader, ctx, options):
     if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
         hyperparameters["multi_precision"] = True
 
+    if options.rho:
+        hyperparameters["rho"] = options.rho
+
     trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
                       update_on_kvstore=False)
 
@@ -232,7 +235,6 @@ def run_training(net, dataloader, ctx, options):
             ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
             label = gluon.utils.split_and_load(label, ctx, even_split=False)
 
-            # Wait for completion of previous iteration to avoid unnecessary memory allocation
             losses = []
 
             for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
@@ -250,8 +252,8 @@ def run_training(net, dataloader, ctx, options):
                                      m_layer_begin_state,
                                      o_layer_begin_state)
                     begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
-                    loss = loss_function(begin, begin_end[0]).mean() + \
-                           loss_function(end, begin_end[1]).mean()
+                    loss = loss_function(begin, begin_end[0]) + \
+                           loss_function(end, begin_end[1])
                     losses.append(loss)
 
             for loss in losses:
@@ -274,25 +276,35 @@ def run_training(net, dataloader, ctx, options):
                     iteration += 1
                     continue
 
-            trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
-            trainer.allreduce_grads()
-
-            gradients = decay_gradients(net, ctx[0], options)
-            gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=True)
-            reset_embedding_gradients(net, ctx[0])
-
-            for name, parameter in net.collect_params().items():
-                grads = parameter.list_grad()
-                source = grads[0]
-                destination = grads[1:]
-
-                for dest in destination:
-                    source.copyto(dest)
-
             scailing_coeff = len(ctx) * options.batch_size \
                 if options.grad_req_add_mode == 0 else options.grad_req_add_mode
 
-            trainer.update(scailing_coeff, ignore_stale_grad=True)
+            if options.lr_warmup_steps:
+                trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
+
+            if options.clip or options.train_unk_token:
+                trainer.allreduce_grads()
+                gradients = get_gradients(net, ctx[0], options)
+
+                if options.clip:
+                    gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=True)
+
+                if options.train_unk_token:
+                    reset_embedding_gradients(net, ctx[0])
+
+                if len(ctx) > 1:
+                    # in multi gpu mode we propagate new gradients to the rest of gpus
+                    for name, parameter in net.collect_params().items():
+                        grads = parameter.list_grad()
+                        source = grads[0]
+                        destination = grads[1:]
+
+                        for dest in destination:
+                            source.copyto(dest)
+
+                trainer.update(scailing_coeff)
+            else:
+                trainer.step(scailing_coeff)
 
             if ema is not None:
                 ema.update()
@@ -337,9 +349,8 @@ def get_learning_rate_per_iteration(iteration, options):
     return min(options.lr, options.lr * (math.log(iteration) / math.log(options.lr_warmup_steps)))
 
 
-def decay_gradients(model, ctx, options):
-    """Apply gradient decay to all layers. For predefined embedding layers, we train only
-    OOV token embeddings
+def get_gradients(model, ctx, options):
+    """Get gradients and apply gradient decay to all layers if required.
 
     :param BiDAFModel model: Model in training
     :param ctx: Contexts
@@ -349,26 +360,29 @@ def decay_gradients(model, ctx, options):
     gradients = []
 
     for name, parameter in model.collect_params().items():
+        if is_fixed_embedding_layer(name) and not options.train_unk_token:
+            continue
+
         grad = parameter.grad(ctx)
 
-        # we train OOV token
-        if is_fixed_embedding_layer(name):
-            grad[0] += options.weight_decay * parameter.data(ctx)[0]
-        else:
-            grad += options.weight_decay * parameter.data(ctx)
+        if options.weight_decay:
+            if is_fixed_embedding_layer(name):
+                grad[0] += options.weight_decay * parameter.data(ctx)[0]
+            else:
+                grad += options.weight_decay * parameter.data(ctx)
+
         gradients.append(grad)
 
     return gradients
 
 
 def reset_embedding_gradients(model, ctx):
-    """Gradients for glove layers of both question and context embeddings doesn't need to be
-    trainer. We train only OOV token embedding.
+    """Gradients for of embedding layer doesn't need to be trained.
+    We train only UNK token of embedding if required.
 
     :param BiDAFModel model: Model in training
     :param ctx: Contexts of training
     """
-    # model.q_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
     model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
 
 
@@ -490,8 +504,6 @@ if __name__ == "__main__":
             transformed_dataset = transform_dataset(dataset_dev, vocab_provider, options=args)
             save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
 
-        exit(0)
-
     if args.train:
         print("Running in training mode")
 
@@ -513,13 +525,6 @@ if __name__ == "__main__":
         net.cast(args.precision)
         net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
         net.hybridize(static_alloc=True)
-
-        # total_params = sum(
-        #     v.data().shape[0] if len(v.data().shape) == 1 else v.data().shape[1]
-        #     if v.data().shape[0] == 0 else v.data().shape[0] if
-        #     v.data().shape[1] == 0 else v.data().shape[0] * v.data().shape[1]
-        #     for k, v in net.ctx_embedding._word_embedding.collect_params().items())
-        # print('number of params: %d' % total_params)
 
         if args.grad_req_add_mode:
             net.collect_params().setattr('grad_req', 'add')

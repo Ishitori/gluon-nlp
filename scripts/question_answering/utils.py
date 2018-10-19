@@ -80,12 +80,13 @@ def get_args():
     parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
     parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
     parser.add_argument('--train', type=bool, default=False, help='Run training')
-    parser.add_argument('--evaluate', type=bool, default=False, help='Run evaluation on dev dataset')
+    parser.add_argument('--evaluate', type=bool, default=False,
+                        help='Run evaluation on dev dataset')
     parser.add_argument('--preprocessed_dataset_path', type=str,
                         default="preprocessed_dataset.p", help='Path to preprocessed dataset')
     parser.add_argument('--preprocessed_val_dataset_path', type=str,
-                        default="preprocessed_val_dataset.p", help='Path to preprocessed '
-                                                                   'validation dataset')
+                        default="preprocessed_val_dataset.p",
+                        help='Path to preprocessed validation dataset')
     parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
                         help='Dimension of the word embedding')
@@ -99,17 +100,19 @@ def get_args():
                         help='Number of layers in Modeling layer of BiDAF')
     parser.add_argument('--output_num_layers', type=int, default=1,
                         help='Number of layers in Output layer of BiDAF')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=60, help='Batch size')
     parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
     parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
     parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
     parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
     parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
-    parser.add_argument('--lr_warmup_steps', type=int, default=1000,
+    parser.add_argument('--rho', type=float, default=0.9,
+                        help='Adadelta decay rate for both squared gradients and delta.')
+    parser.add_argument('--lr_warmup_steps', type=int, default=0,
                         help='Defines how many iterations to spend on warming up learning rate')
-    parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
-    parser.add_argument('--weight_decay', type=float, default=3e-7,
+    parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
+    parser.add_argument('--weight_decay', type=float, default=0,
                         help='Weight decay')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
@@ -123,9 +126,11 @@ def get_args():
                         help='Path to preprocessed character-level vocabulary')
     parser.add_argument('--gpu', type=str, default=None,
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
+    parser.add_argument('--train_unk_token', type=bool, default=False,
+                        help='Should train unknown token of embedding')
     parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
                         help='Use float16 or float32 precision')
-    parser.add_argument('--filter_long_context', type=bool, default='True',
+    parser.add_argument('--filter_long_context', type=bool, default=True,
                         help='Filter contexts if the answer is after ctx_max_len')
     parser.add_argument('--save_prediction_path', type=str, default='',
                         help='Path to save predictions')

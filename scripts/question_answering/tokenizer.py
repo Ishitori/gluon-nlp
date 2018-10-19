@@ -22,11 +22,10 @@ from gluonnlp.data import SpacyTokenizer
 
 
 class BiDAFTokenizer:
-    def __init__(self, base_tokenizer=SpacyTokenizer(), lower_case=False):
+    def __init__(self, base_tokenizer=SpacyTokenizer()):
         self._base_tokenizer = base_tokenizer
-        self._lower_case = lower_case
 
-    def __call__(self, sample):
+    def __call__(self, sample, lower_case=False):
         """
 
         Parameters
@@ -39,13 +38,14 @@ class BiDAFTokenizer:
         ret : list of strs
             List of tokens
         """
-        sample = sample.replace('\'\'', '\" ').replace(r'``', '\" ')
+        sample = sample.replace('\'\'', '\" ').replace(r'``', '\" ')\
+                       .replace(u'\u000A', ' ').replace(u'\u00A0', ' ')
         tokens = self._base_tokenizer(sample)
+        tokens = BiDAFTokenizer._process_tokens(tokens)
 
-        if self._lower_case:
+        if lower_case:
             tokens = [token.lower() for token in tokens]
 
-        # tokens = BiDAFTokenizer._process_tokens(tokens)
         return tokens
 
     @staticmethod
@@ -58,3 +58,12 @@ class BiDAFTokenizer:
             tokens.extend(re.split("([{}])".format("".join(splitters)), token))
 
         return tokens
+
+    @staticmethod
+    def _isascii(token):
+        try:
+            token.encode('ascii')
+            return True
+
+        except UnicodeEncodeError:
+            return False

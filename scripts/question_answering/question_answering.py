@@ -51,7 +51,8 @@ class BiDAFEmbedding(HybridBlock):
 
         with self.name_scope():
             self._char_dense_embedding = nn.Embedding(input_dim=len(char_vocab),
-                                                      output_dim=8)
+                                                      output_dim=8,
+                                                      weight_initializer=initializer.Uniform(0.001))
             self._char_conv_embedding = ConvolutionalEncoder(
                 embed_size=8,
                 num_filters=(100,),
@@ -70,9 +71,11 @@ class BiDAFEmbedding(HybridBlock):
                                               num_layers=contextual_embedding_nlayers,
                                               bidirectional=True, input_size=2 * embedding_size)
 
-    def initialize(self, init=initializer.Uniform(), ctx=None, verbose=False, force_reinit=False):
-        super(BiDAFEmbedding, self).initialize(init, ctx, verbose, force_reinit)
+    def init_embeddings(self, lock_gradients):
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
+
+        if lock_gradients:
+            self._word_embedding.collect_params().setattr('grad_req', 'null')
 
     def begin_state(self, ctx, batch_sizes=None):
         if batch_sizes is None:
@@ -85,16 +88,10 @@ class BiDAFEmbedding(HybridBlock):
         return state_list
 
     def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
-        # Changing shape from NTC to TNC as most MXNet blocks work with TNC format natively
-        # Get word embeddings. Output is batch_size x seq_len x embedding size (100)
         word_embedded = self._word_embedding(w)
-
-        # Get char level embedding in multiple steps:
-        # Step 1. Embed into 8-dim vector
         char_level_data = self._char_dense_embedding(c)
 
-        # Step 2. Transpose to put seq_len first axis to later iterate over it
-        # In that way we can get embedding per token of every batch
+        # Transpose to put seq_len first axis to iterate over it
         char_level_data = F.transpose(char_level_data, axes=(1, 2, 0, 3))
 
         def convolute(token_of_all_batches, _):
@@ -102,25 +99,15 @@ class BiDAFEmbedding(HybridBlock):
 
         char_embedded, _ = F.contrib.foreach(convolute, char_level_data, [])
 
-        # Step 4. Concat all tokens embeddings to create a single tensor.
-        # char_embedded = F.concat(*token_list, dim=0)
-
-        # Step 5. Reshape tensor to match dimensions of embedded words
-        # char_embedded = char_embedded.reshape(shape=(self._max_seq_len,
-        #                                             self._batch_size,
-        #                                             self._embedding_size))
-
-        # Transpose to TNC, to join
+        # Transpose to TNC, to join with character embedding
         word_embedded = F.transpose(word_embedded, axes=(1, 0, 2))
         highway_input = F.concat(char_embedded, word_embedded, dim=2)
 
         def highway(token_of_all_batches, _):
             return self._highway_network(token_of_all_batches), []
 
-        highway_output, _ = F.contrib.foreach(highway, highway_input, [])
-
         # Pass through highway, shape remains unchanged
-        # highway_output = self._highway_network(highway_input)
+        highway_output, _ = F.contrib.foreach(highway, highway_input, [])
 
         # Transpose to TNC - default for LSTM
         ce_output, ce_state = self._contextual_embedding(highway_output,
@@ -258,22 +245,9 @@ class BiDAFOutputLayer(HybridBlock):
         end_index_dense_output = F.squeeze(end_index_dense_output)
         end_index_dense_output_masked = end_index_dense_output + ((1 - mask) *
                                                                   get_very_negative_number())
-        # Don't need to apply softmax for training, but do need for prediction
-        # Maybe should use autograd properties to check it
-        # Will need to reuse it to actually make predictions
-        # start_index_softmax_output = start_index_dense_output.softmax(axis=1)
-        # start_index = F.argmax(start_index_softmax_output, axis=1)
-        # end_index_softmax_output = end_index_dense_output.softmax(axis=1)
-        # end_index = F.argmax(end_index_softmax_output, axis=1)
 
         return start_index_dense_output_masked, \
                end_index_dense_output_masked
-        # producing output in shape 2 x batch_size x units
-        # output = F.concat(F.expand_dims(start_index_dense_output, axis=0),
-        #                    F.expand_dims(end_index_dense_output, axis=0), dim=0)
-
-        # transposing it to batch_size x 2 x units
-        # return F.transpose(output, axes=(1, 0, 2))
 
 
 class BiDAFModel(HybridBlock):
@@ -284,6 +258,7 @@ class BiDAFModel(HybridBlock):
         self._options = options
 
         with self.name_scope():
+            # contextual embedding layer
             self.ctx_embedding = BiDAFEmbedding(options.batch_size,
                                                 word_vocab,
                                                 char_vocab,
@@ -293,15 +268,6 @@ class BiDAFModel(HybridBlock):
                                                 options.embedding_size,
                                                 precision=options.precision,
                                                 prefix="context_embedding")
-            # self.q_embedding = BiDAFEmbedding(options.batch_size,
-            #                                   word_vocab,
-            #                                   char_vocab,
-            #                                   options.q_max_len,
-            #                                   options.ctx_embedding_num_layers,
-            #                                   options.highway_num_layers,
-            #                                   options.embedding_size,
-            #                                   precision=options.precision,
-            #                                   prefix="question_embedding")
 
             # we multiple embedding_size by 2 because we use bidirectional embedding
             self.attention_layer = BidirectionalAttentionFlow(DotProductSimilarity(),
@@ -321,6 +287,11 @@ class BiDAFModel(HybridBlock):
                                                  dropout=options.dropout,
                                                  precision=options.precision)
 
+    def initialize(self, init=initializer.Uniform(), ctx=None, verbose=False,
+                   force_reinit=False):
+        super(BiDAFModel, self).initialize(init, ctx, verbose, force_reinit)
+        self.ctx_embedding.init_embeddings(not self._options.train_unk_token)
+
     def hybrid_forward(self, F, qw, cw, qc, cc,
                        ctx_embedding_states=None,
                        q_embedding_states=None,
@@ -329,7 +300,6 @@ class BiDAFModel(HybridBlock):
                        *args):
         ctx_embedding_output = self.ctx_embedding(cw, cc, ctx_embedding_states)
         q_embedding_output = self.ctx_embedding(qw, qc, q_embedding_states)
-        # self.q_embedding(qw, qc, q_embedding_states)
 
         # attention layer expect batch_size x seq_length x channels
         ctx_embedding_output = F.transpose(ctx_embedding_output, axes=(1, 0, 2))
