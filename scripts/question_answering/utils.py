@@ -78,9 +78,11 @@ def get_args():
     """Get console arguments
     """
     parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
-    parser.add_argument('--preprocess', type=bool, default=False, help='Preprocess dataset only')
-    parser.add_argument('--train', type=bool, default=False, help='Run training')
-    parser.add_argument('--evaluate', type=bool, default=False,
+    parser.add_argument('--preprocess', default=False, action='store_true',
+                        help='Preprocess dataset')
+    parser.add_argument('--train', default=False, action='store_true',
+                        help='Run training')
+    parser.add_argument('--evaluate', default=False, action='store_true',
                         help='Run evaluation on dev dataset')
     parser.add_argument('--preprocessed_dataset_path', type=str,
                         default="preprocessed_dataset.p", help='Path to preprocessed dataset')
@@ -113,7 +115,7 @@ def get_args():
                         help='Defines how many iterations to spend on warming up learning rate')
     parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
     parser.add_argument('--weight_decay', type=float, default=0,
-                        help='Weight decay')
+                        help='Weight decay for parameter updates')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
     parser.add_argument('--resume_training', type=int, default=0,
@@ -126,17 +128,17 @@ def get_args():
                         help='Path to preprocessed character-level vocabulary')
     parser.add_argument('--gpu', type=str, default=None,
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
-    parser.add_argument('--train_unk_token', type=bool, default=False,
+    parser.add_argument('--train_unk_token', default=False, action='store_true',
                         help='Should train unknown token of embedding')
     parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
                         help='Use float16 or float32 precision')
-    parser.add_argument('--filter_long_context', type=bool, default=True,
+    parser.add_argument('--filter_long_context', default=True, action='store_false',
                         help='Filter contexts if the answer is after ctx_max_len')
     parser.add_argument('--save_prediction_path', type=str, default='',
                         help='Path to save predictions')
-    parser.add_argument('--use_multiprecision_in_optimizer', type=bool, default=False,
+    parser.add_argument('--use_multiprecision_in_optimizer', default=True, action='store_false',
                         help='When using float16, shall optimizer use multiprecision.')
-    parser.add_argument('--use_exponential_moving_average', type=bool, default=False,
+    parser.add_argument('--use_exponential_moving_average', default=True, action='store_false',
                         help='Should averaged copy of parameters been stored and used '
                              'during evaluation.')
     parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,

@@ -287,7 +287,7 @@ def run_training(net, dataloader, ctx, options):
                 gradients = get_gradients(net, ctx[0], options)
 
                 if options.clip:
-                    gluon.utils.clip_global_norm(gradients, options.clip, check_isfinite=True)
+                    gluon.utils.clip_global_norm(gradients, options.clip)
 
                 if options.train_unk_token:
                     reset_embedding_gradients(net, ctx[0])
@@ -377,8 +377,8 @@ def get_gradients(model, ctx, options):
 
 
 def reset_embedding_gradients(model, ctx):
-    """Gradients for of embedding layer doesn't need to be trained.
-    We train only UNK token of embedding if required.
+    """Gradients for embedding layer doesn't need to be trained. We train only UNK token of
+    embedding if required.
 
     :param BiDAFModel model: Model in training
     :param ctx: Contexts of training
