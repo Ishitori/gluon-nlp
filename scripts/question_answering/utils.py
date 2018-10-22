@@ -116,10 +116,11 @@ def get_args():
     parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
     parser.add_argument('--weight_decay', type=float, default=0.0001,
                         help='Weight decay for parameter updates')
-    parser.add_argument('--log_interval', type=int, default=250, metavar='N',
-                        help='report interval')
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+                        help='Report interval applied to last epoch only')
     parser.add_argument('--early_stop', default=False, action='store_true',
-                        help='Apply early stopping')
+                        help='Apply early stopping for the last epoch. '
+                             'Should be used with log_interval')
     parser.add_argument('--resume_training', type=int, default=0,
                         help='Resume training from this epoch number')
     parser.add_argument('--save_dir', type=str, default='out_dir',

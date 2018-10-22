@@ -314,19 +314,24 @@ def run_training(net, dataloader, ctx, options):
             if ema is not None:
                 ema.update()
 
-            if options.early_stop and \
-               e == options.epochs - 1 and \
-               iteration % options.log_interval == 0:
-                result = run_evaluate_mode(options, net, ema)
+            if e == options.epochs - 1 and \
+               iteration > 0 and iteration % options.log_interval == 0:
+                evaluate_options = copy.deepcopy(options)
+                evaluate_options.batch_size = 10
+                evaluate_options.epochs = iteration
+                result = run_evaluate_mode(evaluate_options, net, ema)
 
-                if result["f1"] > max_dev_f1:
-                    max_dev_f1 = result["f1"]
-                    max_dev_exact = result["exact_match"]
-                    print("New best evaluation results on dev dataset: {}".format(result))
-                else:
-                    print("Results starts decreasing. Stopping training...")
-                    # Best parameters are saved as "-1" epoch
-                    break
+                print("Iteration {} evaluation results on dev dataset: {}".format(iteration,
+                                                                                  result))
+                if options.early_stop:
+                    if result["f1"] > max_dev_f1:
+                        max_dev_f1 = result["f1"]
+                        max_dev_exact = result["exact_match"]
+                    else:
+                        print("Results starts decreasing - stopping training. "
+                              "Best results are stored at {} params file"\
+                              .format(iteration - options.log_interval))
+                        break
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
@@ -548,11 +553,6 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
     train_dataset = SQuAD(segment='train')
     dataset = SQuAD(segment='dev')
 
-    if existing_net:
-        # currently evaluate can work only with batch_size of 10
-        options = copy.deepcopy(options)
-        options.batch_size = 10
-
     vocab_provider = VocabProvider([train_dataset, dataset], options)
     mapper = QuestionIdMapper(dataset)
 
@@ -575,9 +575,9 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
             params_path = os.path.join(options.save_dir,
                                        'ema_epoch{:d}.params'.format(int(options.epochs) - 1))
         else:
-            save_ema_parameters(existing_ema, -1, options)
+            save_ema_parameters(existing_ema, options.epochs, options)
             params_path = os.path.join(options.save_dir,
-                                       'ema_epoch{:d}.params'.format(-1))
+                                       'ema_epoch{:d}.params'.format(options.epochs))
 
         net.collect_params().load(params_path, ctx=ctx)
     else:
@@ -585,16 +585,14 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
             params_path = os.path.join(options.save_dir,
                                        'epoch{:d}.params'.format(int(options.epochs) - 1))
         else:
-            save_model_parameters(existing_net, -1, options)
+            save_model_parameters(existing_net, options.epochs, options)
             params_path = os.path.join(options.save_dir,
-                                       'epoch{:d}.params'.format(-1))
+                                       'epoch{:d}.params'.format(options.epochs))
 
         net.load_parameters(params_path, ctx=ctx)
 
     net.hybridize(static_alloc=True)
-
-    result = evaluator.evaluate_performance(net, ctx, options)
-    return result
+    return evaluator.evaluate_performance(net, ctx, options)
 
 
 if __name__ == "__main__":
