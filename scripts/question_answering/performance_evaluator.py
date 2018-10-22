@@ -21,6 +21,8 @@
 import multiprocessing
 from mxnet import nd, gluon
 from mxnet.gluon.data import DataLoader, ArrayDataset
+
+from scripts.question_answering.data_processing import SQuADTransform
 from scripts.question_answering.official_squad_eval_script import evaluate
 
 
@@ -145,17 +147,12 @@ class PerformanceEvaluator:
 
         question_id = self._mapper.idx_to_question_id[idx]
         context = self._mapper.question_id_to_context[question_id]
-        context_tokens = self._tokenizer(context)
+        context_tokens = self._tokenizer(context, lower_case=True)
+        indices = SQuADTransform.get_char_indices(context, context_tokens)
 
-        # start index is above the context length - return cannot provide an answer
-        if start > len(context_tokens) - 1:
-            return ''
-
-        # end index is above the context length - let's take answer to the end of the context
-        if end > len(context_tokens) - 1:
-            end = len(context_tokens) - 1
-
-        text = ' '.join(context_tokens[start:end + 1])
+        # get text from cutting string from the initial context
+        # because tokens are hard to combine together
+        text = context[indices[start][0]:indices[end][1]]
         return text
 
     @staticmethod

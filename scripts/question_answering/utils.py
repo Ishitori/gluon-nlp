@@ -109,15 +109,17 @@ def get_args():
     parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
     parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
-    parser.add_argument('--rho', type=float, default=0.9,
+    parser.add_argument('--rho', type=float, default=0.95,
                         help='Adadelta decay rate for both squared gradients and delta.')
     parser.add_argument('--lr_warmup_steps', type=int, default=0,
                         help='Defines how many iterations to spend on warming up learning rate')
     parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
-    parser.add_argument('--weight_decay', type=float, default=0,
+    parser.add_argument('--weight_decay', type=float, default=0.0001,
                         help='Weight decay for parameter updates')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+    parser.add_argument('--log_interval', type=int, default=250, metavar='N',
                         help='report interval')
+    parser.add_argument('--early_stop', default=False, action='store_true',
+                        help='Apply early stopping')
     parser.add_argument('--resume_training', type=int, default=0,
                         help='Resume training from this epoch number')
     parser.add_argument('--save_dir', type=str, default='out_dir',

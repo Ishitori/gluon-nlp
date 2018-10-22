@@ -58,12 +58,3 @@ class BiDAFTokenizer:
             tokens.extend(re.split("([{}])".format("".join(splitters)), token))
 
         return tokens
-
-    @staticmethod
-    def _isascii(token):
-        try:
-            token.encode('ascii')
-            return True
-
-        except UnicodeEncodeError:
-            return False

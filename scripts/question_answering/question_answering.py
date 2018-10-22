@@ -40,7 +40,7 @@ class BiDAFEmbedding(HybridBlock):
     """
     def __init__(self, batch_size, word_vocab, char_vocab, max_seq_len,
                  contextual_embedding_nlayers=2, highway_nlayers=2, embedding_size=100,
-                 precision='float32', prefix=None, params=None):
+                 dropout=0.2, precision='float32', prefix=None, params=None):
         super(BiDAFEmbedding, self).__init__(prefix=prefix, params=params)
 
         self._word_vocab = word_vocab
@@ -53,6 +53,7 @@ class BiDAFEmbedding(HybridBlock):
             self._char_dense_embedding = nn.Embedding(input_dim=len(char_vocab),
                                                       output_dim=8,
                                                       weight_initializer=initializer.Uniform(0.001))
+            self._dropout = nn.Dropout(rate=dropout)
             self._char_conv_embedding = ConvolutionalEncoder(
                 embed_size=8,
                 num_filters=(100,),
@@ -69,7 +70,8 @@ class BiDAFEmbedding(HybridBlock):
             self._highway_network = Highway(2 * embedding_size, num_layers=highway_nlayers)
             self._contextual_embedding = LSTM(hidden_size=embedding_size,
                                               num_layers=contextual_embedding_nlayers,
-                                              bidirectional=True, input_size=2 * embedding_size)
+                                              bidirectional=True, input_size=2 * embedding_size,
+                                              dropout=dropout)
 
     def init_embeddings(self, lock_gradients):
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
@@ -90,6 +92,7 @@ class BiDAFEmbedding(HybridBlock):
     def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
         word_embedded = self._word_embedding(w)
         char_level_data = self._char_dense_embedding(c)
+        char_level_data = self._dropout(char_level_data)
 
         # Transpose to put seq_len first axis to iterate over it
         char_level_data = F.transpose(char_level_data, axes=(1, 2, 0, 3))
@@ -195,23 +198,26 @@ class BiDAFOutputLayer(HybridBlock):
     params : `ParameterDict` or `None`
         Shared Parameters for this `Block`.
     """
-    def __init__(self, batch_size, span_start_input_dim=100, in_units=None, nlayers=1, biflag=True,
+    def __init__(self, batch_size, span_start_input_dim=100, nlayers=1, biflag=True,
                  dropout=0.2, precision='float32', prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
-        in_units = 10 * span_start_input_dim if in_units is None else in_units
         self._batch_size = batch_size
         self._precision = precision
 
         with self.name_scope():
             self._dropout = nn.Dropout(rate=dropout)
-            self._start_index_dense = nn.Dense(units=1, in_units=in_units,
-                                               use_bias=False, flatten=False)
+            self._start_index_g = nn.Dense(units=1, in_units=8 * span_start_input_dim,
+                                           flatten=False)
+            self._start_index_m = nn.Dense(units=1, in_units=2 * span_start_input_dim,
+                                           flatten=False)
             self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
                                         num_layers=nlayers, dropout=dropout, bidirectional=biflag,
                                         input_size=2 * span_start_input_dim)
-            self._end_index_dense = nn.Dense(units=1, in_units=in_units,
-                                             use_bias=False, flatten=False)
+            self._end_index_g = nn.Dense(units=1, in_units=8 * span_start_input_dim,
+                                         flatten=False)
+            self._end_index_m = nn.Dense(units=1, in_units=2 * span_start_input_dim,
+                                         flatten=False)
 
     def begin_state(self, ctx, batch_sizes=None):
         if batch_sizes is None:
@@ -224,19 +230,17 @@ class BiDAFOutputLayer(HybridBlock):
         return state_list
 
     def hybrid_forward(self, F, x, m, mask, state, *args):  # pylint: disable=arguments-differ
-
         # setting batch size as the first dimension
-        start_index_input = F.transpose(F.concat(x, m, dim=2), axes=(1, 0, 2))
-        start_index_input = self._dropout(start_index_input)
+        x = F.transpose(x, axes=(1, 0, 2))
 
-        start_index_dense_output = self._start_index_dense(start_index_input)
+        start_index_dense_output = self._start_index_g(self._dropout(x)) + \
+                                   self._start_index_m(self._dropout(F.transpose(m,
+                                                                                 axes=(1, 0, 2))))
 
-        end_index_input_part, _ = self._end_index_lstm(m, state)
-        end_index_input = F.transpose(F.concat(x, end_index_input_part, dim=2),
-                                      axes=(1, 0, 2))
-
-        end_index_input = self._dropout(end_index_input)
-        end_index_dense_output = self._end_index_dense(end_index_input)
+        m2, _ = self._end_index_lstm(m, state)
+        end_index_dense_output = self._end_index_g(self._dropout(x)) + \
+                                 self._end_index_m(self._dropout(F.transpose(m2,
+                                                                             axes=(1, 0, 2))))
 
         start_index_dense_output = F.squeeze(start_index_dense_output)
         start_index_dense_output_masked = start_index_dense_output + ((1 - mask) *
@@ -266,6 +270,7 @@ class BiDAFModel(HybridBlock):
                                                 options.ctx_embedding_num_layers,
                                                 options.highway_num_layers,
                                                 options.embedding_size,
+                                                dropout=options.dropout,
                                                 precision=options.precision,
                                                 prefix="context_embedding")
 

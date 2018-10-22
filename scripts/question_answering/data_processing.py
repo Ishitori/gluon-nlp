@@ -19,6 +19,7 @@
 
 # pylint: disable=
 """SQuAD data preprocessing."""
+import logging
 import pickle
 
 from os.path import isfile
@@ -106,7 +107,7 @@ class SQuADTransform(object):
         #   2.1 Find char index range for the answer (not tokenized)
         #   2.2 Find Context token indices which char indices contains answer char indices
         #   2.3. Return first and last token indices
-        context_char_indices = SQuADTransform._get_char_indices(context, context_tokens)
+        context_char_indices = SQuADTransform.get_char_indices(context, context_tokens)
 
         for answer_start_char_index, answer in zip(answer_start_list, answer_list):
             answer_token_indices = []
@@ -130,7 +131,7 @@ class SQuADTransform(object):
         return answer_spans
 
     @staticmethod
-    def _get_char_indices(text, text_tokens):
+    def get_char_indices(text, text_tokens):
         """Match token with character indices
 
         :param str text: Text
@@ -243,19 +244,6 @@ class VocabProvider(object):
         word_level_vocab = VocabProvider._create_squad_vocab(all_words)
         word_level_vocab.set_embedding(
             nlp.embedding.create('glove', source='glove.6B.{}d'.format(embedding_size)))
-
-        count = 0
-        count2 = 0
-        for i in range(len(word_level_vocab)):
-            if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
-                count += 1
-            else:
-                if count2 < 50:
-                    print(word_level_vocab.embedding.idx_to_token[i])
-                    count2 += 1
-
-        print("word_level_vocab {}, word_level_vocab.set_embedding {}".format(
-            len(word_level_vocab), count))
 
         if self._options.word_vocab_path:
             pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))

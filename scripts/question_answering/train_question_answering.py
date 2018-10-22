@@ -18,6 +18,7 @@
 # under the License.
 import math
 
+import copy
 import multiprocessing
 import os
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
@@ -69,7 +70,7 @@ def transform_dataset(dataset, vocab_provider, options):
         A tuple of dataset, QuestionIdMapper and original json data for evaluation
     """
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
-                                 options.ctx_max_len, options.word_max_len, args.embedding_size)
+                                 options.ctx_max_len, options.word_max_len, options.embedding_size)
     processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)])
     return processed_dataset
 
@@ -190,12 +191,12 @@ def run_training(net, dataloader, ctx, options):
     if options.rho:
         hyperparameters["rho"] = options.rho
 
-    trainer = Trainer(net.collect_params(), args.optimizer, hyperparameters, kvstore="device",
-                      update_on_kvstore=False)
+    trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters,
+                      kvstore="device", update_on_kvstore=False)
 
-    if args.resume_training:
+    if options.resume_training:
         path = os.path.join(options.save_dir,
-                            'trainer_epoch{:d}.params'.format(args.resume_training - 1))
+                            'trainer_epoch{:d}.params'.format(options.resume_training - 1))
         trainer.load_states(path)
 
     loss_function = SoftmaxCrossEntropyLoss()
@@ -204,9 +205,13 @@ def run_training(net, dataloader, ctx, options):
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
     iteration = 1
+    max_dev_exact = -1
+    max_dev_f1 = -1
+
     print("Starting training...")
 
-    for e in range(0 if not args.resume_training else args.resume_training, args.epochs):
+    for e in range(0 if not options.resume_training else options.resume_training,
+                   options.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
 
         ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
@@ -259,13 +264,13 @@ def run_training(net, dataloader, ctx, options):
             for loss in losses:
                 loss.backward()
 
-            if iteration == 1 and args.use_exponential_moving_average:
+            if iteration == 1 and options.use_exponential_moving_average:
                 ema = PolyakAveraging(net.collect_params(),
-                                      args.exponential_moving_average_weight_decay)
+                                      options.exponential_moving_average_weight_decay)
 
-                if args.resume_training:
+                if options.resume_training:
                     path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(
-                        args.resume_training - 1))
+                        options.resume_training - 1))
                     ema.get_params().load(path)
 
             # in special mode we collect gradients and apply processing only after
@@ -308,6 +313,20 @@ def run_training(net, dataloader, ctx, options):
 
             if ema is not None:
                 ema.update()
+
+            if options.early_stop and \
+               e == options.epochs - 1 and \
+               iteration % options.log_interval == 0:
+                result = run_evaluate_mode(options, net, ema)
+
+                if result["f1"] > max_dev_f1:
+                    max_dev_f1 = result["f1"]
+                    max_dev_exact = result["exact_match"]
+                    print("New best evaluation results on dev dataset: {}".format(result))
+                else:
+                    print("Results starts decreasing. Stopping training...")
+                    # Best parameters are saved as "-1" epoch
+                    break
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
@@ -479,6 +498,105 @@ def load_transformed_dataset(path):
     return processed_dataset
 
 
+def run_preprocess_mode(options):
+    # we use both datasets to create proper vocab
+    dataset_train = SQuAD(segment='train')
+    dataset_dev = SQuAD(segment='dev')
+
+    vocab_provider = VocabProvider([dataset_train, dataset_dev], options)
+    transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=options)
+    save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
+
+    if options.preprocessed_val_dataset_path:
+        transformed_dataset = transform_dataset(dataset_dev, vocab_provider, options=options)
+        save_transformed_dataset(transformed_dataset, options.preprocessed_val_dataset_path)
+
+
+def run_training_mode(options):
+    dataset = SQuAD(segment='train')
+    dataset_val = SQuAD(segment='dev')
+    vocab_provider = VocabProvider([dataset, dataset_val], options)
+
+    if options.preprocessed_dataset_path and isfile(options.preprocessed_dataset_path):
+        transformed_dataset = load_transformed_dataset(options.preprocessed_dataset_path)
+    else:
+        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options)
+        save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
+
+    train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, options)
+    word_vocab, char_vocab = get_vocabs(vocab_provider, options=options)
+    ctx = get_context(options)
+
+    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
+    net.cast(options.precision)
+    net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
+    net.hybridize(static_alloc=True)
+
+    if options.grad_req_add_mode:
+        net.collect_params().setattr('grad_req', 'add')
+
+    if options.resume_training:
+        print("Resuming training from {} epoch".format(options.resume_training))
+        params_path = os.path.join(options.save_dir,
+                                   'epoch{:d}.params'.format(int(options.resume_training) - 1))
+        net.load_parameters(params_path, ctx)
+
+    run_training(net, train_dataloader, ctx, options=options)
+
+
+def run_evaluate_mode(options, existing_net=None, existing_ema=None):
+    train_dataset = SQuAD(segment='train')
+    dataset = SQuAD(segment='dev')
+
+    if existing_net:
+        # currently evaluate can work only with batch_size of 10
+        options = copy.deepcopy(options)
+        options.batch_size = 10
+
+    vocab_provider = VocabProvider([train_dataset, dataset], options)
+    mapper = QuestionIdMapper(dataset)
+
+    if options.preprocessed_val_dataset_path and isfile(options.preprocessed_val_dataset_path):
+        transformed_dataset = load_transformed_dataset(options.preprocessed_val_dataset_path)
+    else:
+        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options)
+        save_transformed_dataset(transformed_dataset, options.preprocessed_val_dataset_path)
+
+    word_vocab, char_vocab = get_vocabs(vocab_provider, options=options)
+    ctx = get_context(options)
+
+    evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
+                                     dataset._read_data(), mapper)
+
+    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
+
+    if options.use_exponential_moving_average:
+        if existing_ema is None:
+            params_path = os.path.join(options.save_dir,
+                                       'ema_epoch{:d}.params'.format(int(options.epochs) - 1))
+        else:
+            save_ema_parameters(existing_ema, -1, options)
+            params_path = os.path.join(options.save_dir,
+                                       'ema_epoch{:d}.params'.format(-1))
+
+        net.collect_params().load(params_path, ctx=ctx)
+    else:
+        if existing_net is None:
+            params_path = os.path.join(options.save_dir,
+                                       'epoch{:d}.params'.format(int(options.epochs) - 1))
+        else:
+            save_model_parameters(existing_net, -1, options)
+            params_path = os.path.join(options.save_dir,
+                                       'epoch{:d}.params'.format(-1))
+
+        net.load_parameters(params_path, ctx=ctx)
+
+    net.hybridize(static_alloc=True)
+
+    result = evaluator.evaluate_performance(net, ctx, options)
+    return result
+
+
 if __name__ == "__main__":
     args = get_args()
     args.batch_size = int(args.batch_size / len(get_context(args)))
@@ -491,84 +609,14 @@ if __name__ == "__main__":
             exit(1)
 
         print("Running in preprocessing mode")
-
-        # we use both datasets to create proper vocab
-        dataset_train = SQuAD(segment='train')
-        dataset_dev = SQuAD(segment='dev')
-
-        vocab_provider = VocabProvider([dataset_train, dataset_dev], args)
-        transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=args)
-        save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
-
-        if args.preprocessed_val_dataset_path:
-            transformed_dataset = transform_dataset(dataset_dev, vocab_provider, options=args)
-            save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
+        run_preprocess_mode(args)
 
     if args.train:
         print("Running in training mode")
-
-        dataset = SQuAD(segment='train')
-        dataset_val = SQuAD(segment='dev')
-        vocab_provider = VocabProvider([dataset, dataset_val], args)
-
-        if args.preprocessed_dataset_path and isfile(args.preprocessed_dataset_path):
-            transformed_dataset = load_transformed_dataset(args.preprocessed_dataset_path)
-        else:
-            transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
-            save_transformed_dataset(transformed_dataset, args.preprocessed_dataset_path)
-
-        train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, args)
-        word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
-        ctx = get_context(args)
-
-        net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
-        net.cast(args.precision)
-        net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
-        net.hybridize(static_alloc=True)
-
-        if args.grad_req_add_mode:
-            net.collect_params().setattr('grad_req', 'add')
-
-        if args.resume_training:
-            print("Resuming training from {} epoch".format(args.resume_training))
-            params_path = os.path.join(args.save_dir,
-                                       'epoch{:d}.params'.format(int(args.resume_training) - 1))
-            net.load_parameters(params_path, ctx)
-
-        run_training(net, train_dataloader, ctx, options=args)
+        run_training_mode(args)
 
     if args.evaluate:
         print("Running in evaluation mode")
-
-        train_dataset = SQuAD(segment='train')
-        dataset = SQuAD(segment='dev')
-
-        vocab_provider = VocabProvider([train_dataset, dataset], args)
-        mapper = QuestionIdMapper(dataset)
-
-        if args.preprocessed_val_dataset_path and isfile(args.preprocessed_val_dataset_path):
-            transformed_dataset = load_transformed_dataset(args.preprocessed_val_dataset_path)
-        else:
-            transformed_dataset = transform_dataset(dataset, vocab_provider, options=args)
-            save_transformed_dataset(transformed_dataset, args.preprocessed_val_dataset_path)
-
-        word_vocab, char_vocab = get_vocabs(vocab_provider, options=args)
-        ctx = get_context(args)
-
-        evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
-                                         dataset._read_data(), mapper)
-        net = BiDAFModel(word_vocab, char_vocab, args, prefix="bidaf")
-
-        if args.use_exponential_moving_average:
-            params_path = os.path.join(args.save_dir,
-                                      'ema_epoch{:d}.params'.format(int(args.epochs) - 1))
-            net.collect_params().load(params_path, ctx=ctx)
-        else:
-            params_path = os.path.join(args.save_dir,
-                                      'epoch{:d}.params'.format(int(args.epochs) - 1))
-            net.load_parameters(params_path, ctx=ctx)
-
-        net.hybridize(static_alloc=True)
-
-        result = evaluator.evaluate_performance(net, ctx, args)
+        result = run_evaluate_mode(args)
         print("Evaluation results on dev dataset: {}".format(result))
+
