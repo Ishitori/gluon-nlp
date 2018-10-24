@@ -109,18 +109,18 @@ def get_args():
     parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
     parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
     parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
-    parser.add_argument('--rho', type=float, default=0.95,
+    parser.add_argument('--rho', type=float, default=0.9,
                         help='Adadelta decay rate for both squared gradients and delta.')
     parser.add_argument('--lr_warmup_steps', type=int, default=0,
                         help='Defines how many iterations to spend on warming up learning rate')
     parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
-    parser.add_argument('--weight_decay', type=float, default=0.0001,
+    parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='Weight decay for parameter updates')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='Report interval applied to last epoch only')
-    parser.add_argument('--early_stop', default=False, action='store_true',
-                        help='Apply early stopping for the last epoch. '
-                             'Should be used with log_interval')
+    parser.add_argument('--early_stop', type=int, default=4,
+                        help='Apply early stopping for the last epoch. Stop after # of consequent '
+                             '# of times F1 is lower than max. Should be used with log_interval')
     parser.add_argument('--resume_training', type=int, default=0,
                         help='Resume training from this epoch number')
     parser.add_argument('--save_dir', type=str, default='out_dir',
@@ -209,7 +209,7 @@ def _get_combination(combination, tensors):
             raise NotImplementedError
 
 
-def combine_tensors(combination, tensors):
+def combine_tensors(F, combination, tensors):
     """
     Combines a list of tensors using element-wise operations and concatenation, specified by a
     ``combination`` string.  The string refers to (1-indexed) positions in the input tensor list,
@@ -235,7 +235,7 @@ def combine_tensors(combination, tensors):
     """
     combination = combination.replace('x', '1').replace('y', '2')
     to_concatenate = [_get_combination(piece, tensors) for piece in combination.split(',')]
-    return nd.concat(to_concatenate, dim=-1)
+    return F.concat(*to_concatenate, dim=-1)
 
 
 def masked_softmax(F, vector, mask, epsilon):

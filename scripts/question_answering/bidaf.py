@@ -32,7 +32,6 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
 
     """
     def __init__(self,
-                 attention_similarity_function,
                  batch_size,
                  passage_length,
                  question_length,
@@ -46,9 +45,6 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         self._question_length = question_length
         self._encoding_dim = encoding_dim
         self._precision = precision
-        self._matrix_attention = AttentionFlow(attention_similarity_function,
-                                               batch_size, passage_length, question_length,
-                                               encoding_dim)
 
     def _get_big_negative_value(self):
         if self._precision == 'float16':
@@ -62,13 +58,12 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         else:
             return np.finfo(np.float32).eps
 
-    def hybrid_forward(self, F, encoded_passage, encoded_question, question_mask, passage_mask):
+    def hybrid_forward(self, F, passage_question_similarity,
+                       encoded_passage, encoded_question, question_mask, passage_mask):
         # pylint: disable=arguments-differ
         """
         """
-
         # Shape: (batch_size, passage_length, question_length)
-        passage_question_similarity = self._matrix_attention(encoded_passage, encoded_question)
         passage_question_similarity_shape = (self._batch_size, self._passage_length,
                                              self._question_length)
 

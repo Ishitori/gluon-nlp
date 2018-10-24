@@ -18,7 +18,7 @@
 # under the License.
 
 import mxnet as mx
-from mxnet import gluon
+from mxnet import gluon, initializer
 from mxnet.gluon import nn, Parameter
 
 from .utils import combine_tensors
@@ -78,8 +78,8 @@ class CosineSimilarity(SimilarityFunction):
     """
 
     def hybrid_forward(self, F, array_1, array_2):
-        normalized_array_1 = array_1 / F.norm(array_1, axis=-1, keepdims=True)
-        normalized_array_2 = array_2 / F.norm(array_2, axis=-1, keepdims=True)
+        normalized_array_1 = F.broadcast_div(array_1, F.norm(array_1, axis=-1, keepdims=True))
+        normalized_array_2 = F.broadcast_div(array_2, F.norm(array_2, axis=-1, keepdims=True))
         return (normalized_array_1 * normalized_array_2).sum(axis=-1)
 
 
@@ -164,21 +164,26 @@ class LinearSimilarity(SimilarityFunction):
                  activation='linear',
                  **kwargs):
         super(LinearSimilarity, self).__init__(**kwargs)
-        self._combination = combination
-        self._weight_matrix = Parameter(name="weight_matrix",
-                                        shape=(array_1_dim, array_2_dim), init=mx.init.Uniform())
-        self._bias = Parameter(name="bias", shape=(array_1_dim,), init=mx.init.Zero())
+        self.combination = combination
 
         if activation == 'linear':
             self._activation = None
         else:
             self._activation = nn.Activation(activation)
 
-    def hybrid_forward(self, F, array_1, array_2):
-        combined_tensors = combine_tensors(self._combination, [array_1, array_1])
-        dot_product = F.broadcast_mull(combined_tensors, self._weight_matrix)
+        with self.name_scope():
+            self.weight_matrix = self.params.get("weight_matrix",
+                                                 shape=(array_1_dim, array_2_dim),
+                                                 init=initializer.Uniform())
+            self.bias = self.params.get("bias",
+                                        shape=(array_1_dim,),
+                                        init=initializer.Zero())
+
+    def hybrid_forward(self, F, array_1, array_2, weight_matrix, bias):
+        combined_tensors = combine_tensors(F, self.combination, [array_1, array_2])
+        dot_product = F.batch_dot(combined_tensors, weight_matrix)
 
         if not self._activation:
             return dot_product
 
-        return self._activation(dot_product + self._bias)
+        return self._activation(dot_product + bias)

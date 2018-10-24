@@ -245,6 +245,21 @@ class VocabProvider(object):
         word_level_vocab.set_embedding(
             nlp.embedding.create('glove', source='glove.6B.{}d'.format(embedding_size)))
 
+        # count = 0
+        # words_no_embedding = []
+        # for i in range(len(word_level_vocab)):
+        #     if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
+        #         count += 1
+        #     else:
+        #         words_no_embedding.append(word_level_vocab.embedding.idx_to_token[i])
+        #
+        # with open("no_embedding_words.txt", "w") as f:
+        #     for word in words_no_embedding:
+        #         f.write(word + "\n")
+        #
+        # print("word_level_vocab {}, word_level_vocab.set_embedding {}".format(
+        #     len(word_level_vocab), count))
+
         if self._options.word_vocab_path:
             pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
 

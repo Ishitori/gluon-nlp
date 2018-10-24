@@ -18,12 +18,12 @@
 # under the License.
 import re
 
-from gluonnlp.data import SpacyTokenizer
+import nltk
 
 
 class BiDAFTokenizer:
-    def __init__(self, base_tokenizer=SpacyTokenizer()):
-        self._base_tokenizer = base_tokenizer
+    def __init__(self):
+        pass
 
     def __call__(self, sample, lower_case=False):
         """
@@ -38,10 +38,12 @@ class BiDAFTokenizer:
         ret : list of strs
             List of tokens
         """
-        sample = sample.replace('\'\'', '\" ').replace(r'``', '\" ')\
-                       .replace(u'\u000A', ' ').replace(u'\u00A0', ' ')
-        tokens = self._base_tokenizer(sample)
+        sample = sample.replace('\n', ' ').replace(u'\u000A', '').replace(u'\u00A0', '')
+
+        tokens = [token.replace("''", '"').replace("``", '"') for token in
+                  nltk.word_tokenize(sample)]
         tokens = BiDAFTokenizer._process_tokens(tokens)
+        tokens = [token for token in tokens if len(token) > 0]
 
         if lower_case:
             tokens = [token.lower() for token in tokens]

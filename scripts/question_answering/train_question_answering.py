@@ -47,12 +47,8 @@ from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.utils import logging_config, get_args
 
-np.random.seed(100)
-random.seed(100)
-mx.random.seed(10000)
 
-
-def transform_dataset(dataset, vocab_provider, options):
+def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
     """Get transformed dataset
 
     Parameters
@@ -63,15 +59,50 @@ def transform_dataset(dataset, vocab_provider, options):
         Vocabulary provider
     options : `Namespace`
         Data transformation arguments
+    enable_filtering : `Bool`
+        Remove data that doesn't match BiDAF model requirements
 
     Returns
     -------
     data : Tuple
         A tuple of dataset, QuestionIdMapper and original json data for evaluation
     """
+    tokenizer = vocab_provider.get_tokenizer()
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
                                  options.ctx_max_len, options.word_max_len, options.embedding_size)
-    processed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)])
+
+    transformed_records = []
+    long_context = 0
+    long_question = 0
+
+    for i, record in enumerate(dataset):
+        if enable_filtering:
+            tokenized_question = tokenizer(record[2], lower_case=True)
+            # we don't need to dispose of context as long as the answer is still
+            # present in the context after it is trimmed
+            # tokenized_context = tokenizer(record[3], lower_case=True)
+            #
+            # if len(tokenized_context) > options.ctx_max_len:
+            #     long_context += 1
+            #     continue
+
+            # but we don't know if the question is still meaningful
+            if len(tokenized_question) > options.q_max_len:
+                long_question += 1
+                continue
+
+        transformed_record = transformer(*record)
+
+        # if answer end index is after ctx_max_len token or
+        # it is after q_max_len token we do not use this record
+        if enable_filtering and transformed_record[6][0][1] >= options.ctx_max_len:
+            continue
+
+        transformed_records.append(transformed_record)
+
+    processed_dataset = SimpleDataset(transformed_records)
+    print("{}/{} records. Too long context {}, too long query {}".format(
+        len(processed_dataset), i + 1, long_context, long_question))
     return processed_dataset
 
 
@@ -116,7 +147,8 @@ def get_record_per_answer_span(processed_dataset, options):
     dataloader = DataLoader(loadable_data,
                             batch_size=options.batch_size * len(get_context(options)),
                             shuffle=True,
-                            last_batch='discard',
+                            last_batch='rollover',
+                            pin_memory=True,
                             num_workers=(multiprocessing.cpu_count() -
                                          len(get_context(options)) - 2))
 
@@ -207,6 +239,8 @@ def run_training(net, dataloader, ctx, options):
     iteration = 1
     max_dev_exact = -1
     max_dev_f1 = -1
+    max_iteration = -1
+    early_stop_tries = 0
 
     print("Starting training...")
 
@@ -307,14 +341,15 @@ def run_training(net, dataloader, ctx, options):
                         for dest in destination:
                             source.copyto(dest)
 
-                trainer.update(scailing_coeff)
+                trainer.update(scailing_coeff, ignore_stale_grad=True)
             else:
-                trainer.step(scailing_coeff)
+                trainer.step(scailing_coeff, ignore_stale_grad=True)
 
             if ema is not None:
                 ema.update()
 
             if e == options.epochs - 1 and \
+               options.log_interval > 0 and \
                iteration > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
                 evaluate_options.batch_size = 10
@@ -327,11 +362,18 @@ def run_training(net, dataloader, ctx, options):
                     if result["f1"] > max_dev_f1:
                         max_dev_f1 = result["f1"]
                         max_dev_exact = result["exact_match"]
+                        max_iteration = iteration
+                        early_stop_tries = 0
                     else:
-                        print("Results starts decreasing - stopping training. "
-                              "Best results are stored at {} params file"\
-                              .format(iteration - options.log_interval))
-                        break
+                        if early_stop_tries < options.early_stop:
+                            early_stop_tries += 1
+                            print("Results decreased for {} times".format(early_stop_tries))
+                        else:
+                            print("Results decreased for {} times. Stop training. "
+                                  "Best results are stored at {} params file. F1={}, EM={}"\
+                                  .format(options.early_stop + 1, max_iteration,
+                                          max_dev_f1, max_dev_exact))
+                            break
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
@@ -509,7 +551,8 @@ def run_preprocess_mode(options):
     dataset_dev = SQuAD(segment='dev')
 
     vocab_provider = VocabProvider([dataset_train, dataset_dev], options)
-    transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=options)
+    transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=options,
+                                            enable_filtering=True)
     save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
 
     if options.preprocessed_val_dataset_path:
@@ -525,7 +568,8 @@ def run_training_mode(options):
     if options.preprocessed_dataset_path and isfile(options.preprocessed_dataset_path):
         transformed_dataset = load_transformed_dataset(options.preprocessed_dataset_path)
     else:
-        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options)
+        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options,
+                                                enable_filtering=True)
         save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
 
     train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, options)
@@ -534,8 +578,8 @@ def run_training_mode(options):
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
     net.cast(options.precision)
-    net.initialize(init.Xavier(magnitude=2.24), ctx=ctx)
-    net.hybridize(static_alloc=True)
+    net.initialize(init.Xavier(), ctx=ctx)
+    # net.hybridize(static_alloc=True)
 
     if options.grad_req_add_mode:
         net.collect_params().setattr('grad_req', 'add')

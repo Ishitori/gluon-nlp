@@ -393,6 +393,22 @@ def test_get_answer_spans_after_comma():
     assert result == [(23, 23)]
 
 
+def test_get_answer_spans_after_quotes():
+    tokenizer = BiDAFTokenizer()
+
+    context = "In the film Knute Rockne, All American, Knute Rockne (played by Pat O'Brien) delivers the famous ""Win one for the Gipper"" speech, at which point the background music swells with the ""Notre Dame Victory March"". George Gipp was played by Ronald Reagan, whose nickname ""The Gipper"" was derived from this role. This scene was parodied in the movie Airplane! with the same background music, only this time honoring George Zipp, one of Ted Striker's former comrades. The song also was prominent in the movie Rudy, with Sean Astin as Daniel ""Rudy"" Ruettiger, who harbored dreams of playing football at the University of Notre Dame despite significant obstacles."
+    context_tokens = tokenizer(context, lower_case=True)
+    indices = SQuADTransform.get_char_indices(context, context_tokens)
+
+    answer_start_char_index = 267
+    answer = "The Gipper"
+
+    result = SQuADTransform._get_answer_spans(context, context_tokens,
+                                              [answer], [answer_start_char_index])
+
+    assert result == [(54, 55)]
+
+
 def test_get_char_indices():
     context = "to Saint Bernadette Soubirous in 1858. At the end of the main drive (and in a direct line that connects through 3 statues and the Gold Dome), is a simple, modern stone statue of Mary."
     tokenizer = BiDAFTokenizer()
@@ -400,6 +416,15 @@ def test_get_char_indices():
 
     result = SQuADTransform._get_char_indices(context, context_tokens)
     assert len(result) == len(context_tokens)
+
+
+def test_tokenizer_split_new_lines():
+    context = "that are of equal energy\u2014i.e., degenerate\u2014is a     configuration termed a spin triplet state. Hence, the ground state of the O\n2 molecule is referred to as triplet oxygen"
+
+    tokenizer = BiDAFTokenizer()
+    context_tokens = tokenizer(context)
+
+    assert len(context_tokens) == 35
 
 
 def test_polyak_averaging():

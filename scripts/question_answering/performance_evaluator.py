@@ -64,6 +64,7 @@ class PerformanceEvaluator:
                         for r in self._evaluation_dataset])
         eval_dataloader = DataLoader(eval_dataset, batch_size=options.batch_size,
                                      last_batch='keep',
+                                     pin_memory=True,
                                      num_workers=(multiprocessing.cpu_count() - len(ctx) - 2))
 
         for i, data in enumerate(eval_dataloader):

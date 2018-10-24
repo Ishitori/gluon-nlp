@@ -18,8 +18,10 @@
 # under the License.
 
 """BiDAF model blocks"""
+from scripts.question_answering.attention_flow import AttentionFlow
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
-from scripts.question_answering.similarity_function import DotProductSimilarity
+from scripts.question_answering.similarity_function import DotProductSimilarity, CosineSimilarity, \
+    LinearSimilarity
 from scripts.question_answering.utils import get_very_negative_number
 
 __all__ = ['BiDAFEmbedding', 'BiDAFModelingLayer', 'BiDAFOutputLayer', 'BiDAFModel']
@@ -274,9 +276,18 @@ class BiDAFModel(HybridBlock):
                                                 precision=options.precision,
                                                 prefix="context_embedding")
 
+            self.similarity_function = LinearSimilarity(array_1_dim=6 * options.embedding_size,
+                                                        array_2_dim=1,
+                                                        combination="x,y,x*y")
+
+            self.matrix_attention = AttentionFlow(self.similarity_function,
+                                                  options.batch_size,
+                                                  options.ctx_max_len,
+                                                  options.q_max_len,
+                                                  2 * options.embedding_size)
+
             # we multiple embedding_size by 2 because we use bidirectional embedding
-            self.attention_layer = BidirectionalAttentionFlow(DotProductSimilarity(),
-                                                              options.batch_size,
+            self.attention_layer = BidirectionalAttentionFlow(options.batch_size,
                                                               options.ctx_max_len,
                                                               options.q_max_len,
                                                               2 * options.embedding_size,
@@ -314,7 +325,11 @@ class BiDAFModel(HybridBlock):
         q_mask = qw != 0
         ctx_mask = cw != 0
 
-        attention_layer_output = self.attention_layer(ctx_embedding_output,
+        passage_question_similarity = self.matrix_attention(ctx_embedding_output,
+                                                            q_embedding_output).sum(axis=-1)
+
+        attention_layer_output = self.attention_layer(passage_question_similarity,
+                                                      ctx_embedding_output,
                                                       q_embedding_output,
                                                       q_mask,
                                                       ctx_mask)
