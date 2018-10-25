@@ -27,9 +27,6 @@ from os.path import isfile
 import logging
 import pickle
 
-import argparse
-import numpy as np
-import random
 from time import time
 
 import mxnet as mx
@@ -64,8 +61,8 @@ def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
 
     Returns
     -------
-    data : Tuple
-        A tuple of dataset, QuestionIdMapper and original json data for evaluation
+    data : SimpleDataset
+        Transformed dataset
     """
     tokenizer = vocab_provider.get_tokenizer()
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
@@ -78,37 +75,28 @@ def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
     for i, record in enumerate(dataset):
         if enable_filtering:
             tokenized_question = tokenizer(record[2], lower_case=True)
-            # we don't need to dispose of context as long as the answer is still
-            # present in the context after it is trimmed
-            # tokenized_context = tokenizer(record[3], lower_case=True)
-            #
-            # if len(tokenized_context) > options.ctx_max_len:
-            #     long_context += 1
-            #     continue
 
-            # but we don't know if the question is still meaningful
             if len(tokenized_question) > options.q_max_len:
                 long_question += 1
                 continue
 
         transformed_record = transformer(*record)
 
-        # if answer end index is after ctx_max_len token or
-        # it is after q_max_len token we do not use this record
+        # if answer end index is after ctx_max_len token we do not use this record
         if enable_filtering and transformed_record[6][0][1] >= options.ctx_max_len:
             continue
 
         transformed_records.append(transformed_record)
 
     processed_dataset = SimpleDataset(transformed_records)
-    print("{}/{} records. Too long context {}, too long query {}".format(
+    print("{}/{} records left. Too long context {}, too long query {}".format(
         len(processed_dataset), i + 1, long_context, long_question))
     return processed_dataset
 
 
 def get_record_per_answer_span(processed_dataset, options):
-    """Each record has multiple answers and for training purposes it is better to increase number of
-    records by creating a record per each answer.
+    """Each record might have multiple answers and for training purposes it is better to increase
+    number of records by creating a record per each answer.
 
     Parameters
     ----------
@@ -184,12 +172,15 @@ def get_context(options):
     options : `Namespace`
         Command arguments
 
+    Returns
+    -------
+    ctx : list[Context]
+        List of contexts
     """
     ctx = []
 
     if options.gpu is None:
         ctx.append(mx.cpu(0))
-        ctx.append(mx.cpu(1))
         print('Use CPU')
     else:
         indices = options.gpu.split(',')
@@ -404,11 +395,18 @@ def get_learning_rate_per_iteration(iteration, options):
     """Returns learning rate based on current iteration. Used to implement learning rate warm up
     technique
 
-    :param int iteration: Number of iteration
-    :param NameSpace options: Training options
-    :return float: learning rate
-    """
+    Parameters
+    ----------
+    iteration : `int`
+        Number of iteration
+    options : `Namespace`
+        Training options
 
+    Returns
+    -------
+    learning_rate : float
+        Learning rate
+    """
     if options.resume_training:
         return options.lr
 
@@ -418,10 +416,19 @@ def get_learning_rate_per_iteration(iteration, options):
 def get_gradients(model, ctx, options):
     """Get gradients and apply gradient decay to all layers if required.
 
-    :param BiDAFModel model: Model in training
-    :param ctx: Contexts
-    :param NameSpace options: Training options
-    :return: Array of gradients
+    Parameters
+    ----------
+    model : `BiDAFModel`
+        Model in training
+    ctx : `Context`
+        Training context
+    options : `Namespace`
+        Training options
+
+    Returns
+    -------
+    gradients : list
+        List of gradients
     """
     gradients = []
 
@@ -446,13 +453,24 @@ def reset_embedding_gradients(model, ctx):
     """Gradients for embedding layer doesn't need to be trained. We train only UNK token of
     embedding if required.
 
-    :param BiDAFModel model: Model in training
-    :param ctx: Contexts of training
+    Parameters
+    ----------
+    model : `BiDAFModel`
+        Model in training
+    ctx : `Context`
+        Training context
     """
     model.ctx_embedding._word_embedding.weight.grad(ctx=ctx)[1:] = 0
 
 
 def is_fixed_embedding_layer(name):
+    """Check if this is an embedding layer which parameters are supposed to be fixed
+
+    Parameters
+    ----------
+    name : `str`
+        Layer name to check
+    """
     return True if "predefined_embedding_layer" in name else False
 
 
@@ -468,7 +486,6 @@ def save_model_parameters(net, epoch, options):
     options : `Namespace`
         Saving arguments
     """
-
     if not os.path.exists(options.save_dir):
         os.mkdir(options.save_dir)
 
@@ -540,12 +557,24 @@ def load_transformed_dataset(path):
     ----------
     path : `str`
         Loading path
+
+    Returns
+    -------
+    processed_dataset : SimpleDataset
+        Transformed dataset
     """
     processed_dataset = pickle.load(open(path, "rb"))
     return processed_dataset
 
 
 def run_preprocess_mode(options):
+    """Run program in data preprocessing mode
+
+    Parameters
+    ----------
+    options : `Namespace`
+        Data preprocessing arguments
+    """
     # we use both datasets to create proper vocab
     dataset_train = SQuAD(segment='train')
     dataset_dev = SQuAD(segment='dev')
@@ -561,6 +590,13 @@ def run_preprocess_mode(options):
 
 
 def run_training_mode(options):
+    """Run program in data training mode
+
+    Parameters
+    ----------
+    options : `Namespace`
+        Model training parameters
+    """
     dataset = SQuAD(segment='train')
     dataset_val = SQuAD(segment='dev')
     vocab_provider = VocabProvider([dataset, dataset_val], options)
@@ -594,6 +630,18 @@ def run_training_mode(options):
 
 
 def run_evaluate_mode(options, existing_net=None, existing_ema=None):
+    """Run program in evaluating mode
+
+    Parameters
+    ----------
+    options : `Namespace`
+        Model evaluation arguments
+
+    Returns
+    -------
+    result : dict
+        Dictionary with exact_match and F1 scores
+    """
     train_dataset = SQuAD(segment='train')
     dataset = SQuAD(segment='dev')
 

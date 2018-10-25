@@ -58,6 +58,29 @@ class SQuADTransform(object):
         """
         Method converts text into numeric arrays based on Vocabulary.
         Answers are not processed, as they are not needed in input
+
+        Parameters
+        ----------
+
+        record_index: int
+            Index of the record
+        question_id: str
+            Question Id
+        question: str
+            Question
+        context: str
+            Context
+        answer_list: list[str]
+            List of answers
+        answer_start_list: list[int]
+            List of start indices of answers
+
+        Returns
+        -------
+        record: Tuple
+            A tuple containing record_index [int], question_id [str], question_words_nd [NDArray],
+            context_words_nd [NDArray], question_chars_nd [NDArray[, context_chars_nd [NDArray],
+            answer_spans [list[Tuple]]
         """
         question_tokens = self._tokenizer(question, lower_case=True)
         context_tokens = self._tokenizer(context, lower_case=True)
@@ -91,13 +114,21 @@ class SQuADTransform(object):
         """Find all answer spans from the context, returning start_index and end_index.
         Each index is a index of a token
 
-        :param list[str] context_tokens: Tokenized paragraph
-        :param list[str] answer_list: List of all answers
+        Parameters
+        ----------
+        context: str
+            Context
+        context_tokens: list[str]
+            Tokenized context
+        answer_list: list[str]
+            List of answers
+        answer_start_list: list[int]
+            List of answers start indices
 
         Returns
         -------
-        List[Tuple]
-            list of Tuple(answer_start_index answer_end_index) per question
+        answer_spans: List[Tuple]
+            List of Tuple(answer_start_index answer_end_index) per question
         """
         answer_spans = []
         # SQuAD answers doesn't always match to used tokens in the context. Sometimes there is only
@@ -134,9 +165,17 @@ class SQuADTransform(object):
     def get_char_indices(text, text_tokens):
         """Match token with character indices
 
-        :param str text: Text
-        :param List[str] text_tokens: Tokens of the text
-        :return: List of char_indexes where the order equals to token index
+        Parameters
+        ----------
+        text: str
+            Text
+        text_tokens: list[str]
+            Tokens of the text
+
+        Returns
+        -------
+        char_indices_per_token: List[Tuple]
+            List of (start_index, end_index) of characters where the position equals to token index
         """
         char_indices_per_token = []
         current_index = 0
@@ -152,9 +191,17 @@ class SQuADTransform(object):
     def _pad_to_max_char_length(self, item, max_item_length):
         """Pads all tokens to maximum size
 
-        :param NDArray item: matrix of indices
-        :param int max_item_length: maximum length of a token
-        :return:
+        Parameters
+        ----------
+        item: NDArray
+            Matrix of indices
+        max_item_length: int
+            Maximum length of a token
+
+        Returns
+        -------
+        NDArray
+            Padded NDArray
         """
         # expand dimensions to 4 and turn to float32, because nd.pad can work only with 4 dims
         data_expanded = item.reshape(1, 1, item.shape[0], item.shape[1]).astype(np.float32)
@@ -174,9 +221,17 @@ class SQuADTransform(object):
     def _pad_to_max_word_length(item, max_length):
         """Pads sentences to maximum length
 
-        :param NDArray item: vector of words
-        :param int max_length: Maximum length of question/context
-        :return:
+        Parameters
+        ----------
+        item: NDArray
+            Vector of words
+        max_length: int
+            Maximum length of question/context
+
+        Returns
+        -------
+        NDArray
+            Padded vector of tokens
         """
         data_nd = nd.array(item, dtype=np.float32)
         # expand dimensions to 4 and turn to float32, because nd.pad can work only with 4 dims
@@ -200,7 +255,14 @@ class VocabProvider(object):
         self._tokenizer = tokenizer
 
     def get_tokenizer(self):
-        """Provides tokenizer used to create vocab"""
+        """Provides tokenizer used to create vocab
+
+        Returns
+        -------
+        tokenizer: Tokenizer
+            Tokenizer
+
+        """
         return self._tokenizer
 
     def get_char_level_vocab(self):
@@ -245,20 +307,13 @@ class VocabProvider(object):
         word_level_vocab.set_embedding(
             nlp.embedding.create('glove', source='glove.6B.{}d'.format(embedding_size)))
 
-        # count = 0
-        # words_no_embedding = []
-        # for i in range(len(word_level_vocab)):
-        #     if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
-        #         count += 1
-        #     else:
-        #         words_no_embedding.append(word_level_vocab.embedding.idx_to_token[i])
-        #
-        # with open("no_embedding_words.txt", "w") as f:
-        #     for word in words_no_embedding:
-        #         f.write(word + "\n")
-        #
-        # print("word_level_vocab {}, word_level_vocab.set_embedding {}".format(
-        #     len(word_level_vocab), count))
+        count = 0
+
+        for i in range(len(word_level_vocab)):
+            if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
+                count += 1
+
+        print("{}/{} words have embeddings".format(count, len(word_level_vocab)))
 
         if self._options.word_vocab_path:
             pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
@@ -267,11 +322,37 @@ class VocabProvider(object):
 
     @staticmethod
     def _create_squad_vocab(all_tokens):
+        """Provides vocabulary based on list of tokens
+
+        Parameters
+        ----------
+
+        all_tokens: List[str]
+            List of all tokens
+
+        Returns
+        -------
+        Vocab
+            Vocabulary
+        """
         counter = data.count_tokens(all_tokens)
         vocab = Vocab(counter)
         return vocab
 
     def _get_all_word_tokens(self, dataset):
+        """Provides all words from context and question of the dataset
+
+        Parameters
+        ----------
+
+        dataset: SimpleDataset
+            Dataset of SQuAD
+
+        Returns
+        -------
+        all_tokens: list[str]
+            List of all words
+        """
         all_tokens = []
 
         for data_item in dataset:
@@ -281,6 +362,19 @@ class VocabProvider(object):
         return all_tokens
 
     def _get_all_char_tokens(self, dataset):
+        """Provides all characters from context and question of the dataset
+
+        Parameters
+        ----------
+
+        dataset: SimpleDataset
+            Dataset of SQuAD
+
+        Returns
+        -------
+        all_tokens: list[str]
+            List of all characters
+        """
         all_tokens = []
 
         for data_item in dataset:

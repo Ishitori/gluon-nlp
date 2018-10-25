@@ -17,21 +17,20 @@
 # specific language governing permissions and limitations
 # under the License.
 import re
-
 import nltk
 
 
 class BiDAFTokenizer:
-    def __init__(self):
-        pass
-
+    """Tokenizer that is used for preprocessing data for BiDAF model. It applies basic tokenizer
+    and some extra preprocessing steps making data ready to be used for training BiDAF
+    """
     def __call__(self, sample, lower_case=False):
-        """
+        """Process single record
 
         Parameters
         ----------
         sample: str
-            The sentence to tokenize
+            The record to tokenize
 
         Returns
         -------
@@ -52,6 +51,18 @@ class BiDAFTokenizer:
 
     @staticmethod
     def _process_tokens(temp_tokens):
+        """Process tokens by splitting them if split symbol is encountered
+
+        Parameters
+        ----------
+        temp_tokens: list[str]
+            Tokens to be processed
+
+        Returns
+        -------
+        tokens : list[str]
+            List of updated tokens
+        """
         tokens = []
         splitters = ("-", "\u2212", "\u2014", "\u2013", "/", "~", '"', "'", "\u201C",
                      "\u2019", "\u201D", "\u2018", "\u00B0")

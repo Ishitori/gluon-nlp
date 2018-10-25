@@ -21,6 +21,9 @@
 
 
 class QuestionIdMapper:
+    """Stores mapping between question id and context of SQuAD dataset
+
+    """
     def __init__(self, dataset):
         self._question_id_to_context = {item[1]: item[3] for item in dataset}
         self._question_id_to_idx = {item[1]: item[0] for item in dataset}
@@ -28,12 +31,33 @@ class QuestionIdMapper:
 
     @property
     def question_id_to_context(self):
+        """Provides question Id to context map
+
+        Returns
+        -------
+        map: Dict
+            Question Id to Context map
+        """
         return self._question_id_to_context
 
     @property
     def idx_to_question_id(self):
+        """Provides record index to question Id map
+
+        Returns
+        -------
+        map: Dict
+            Record index to question Id map
+        """
         return self._idx_to_question_id
 
     @property
     def question_id_to_idx(self):
+        """Provides question Id to record index map
+
+        Returns
+        -------
+        map: Dict
+            Question Id to record index map
+        """
         return self._question_id_to_idx

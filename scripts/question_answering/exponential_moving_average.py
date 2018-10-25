@@ -24,6 +24,8 @@ from mxnet import gluon
 
 
 class PolyakAveraging:
+    """Class to do Polyak averaging based on this paper
+    http://www.meyn.ece.ufl.edu/archive/spm_files/Courses/ECE555-2011/555media/poljud92.pdf"""
     def __init__(self, params, decay):
         self._params = params
         self._decay = decay
@@ -47,18 +49,26 @@ class PolyakAveraging:
                 self._decay * polyak_param.data(mx.cpu()))
 
     def get_params(self):
-        """
-        :return: returns the averaged parameters
-        :rtype: gluon.ParameterDict
+        """ Provides averaged parameters
+
+        Returns
+        -------
+        gluon.ParameterDict
+            Averaged parameters
         """
         return self._polyak_params_dict
 
     def _param_data_to_cpu(self, param):
-        """
-        Returns a copy (on CPU context) of the data held in some context of given parameter.
+        """Returns a copy (on CPU context) of the data held in some context of given parameter.
 
-        :param gluon.Parameter param: parameter's whose data needs to be copied.
-        :return: copy of data on CPU context.
-        :rtype: nd.NDArray
+        Parameters
+        ----------
+        param: gluon.Parameter
+            Parameter's whose data needs to be copied.
+
+        Returns
+        -------
+        NDArray
+            Copy of data on CPU context.
         """
         return param.list_data()[0].copyto(mx.cpu())

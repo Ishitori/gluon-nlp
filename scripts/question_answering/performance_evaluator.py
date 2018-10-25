@@ -27,6 +27,7 @@ from scripts.question_answering.official_squad_eval_script import evaluate
 
 
 class PerformanceEvaluator:
+    """Plugin to run prediction and performance evaluation via official eval script"""
     def __init__(self, tokenizer, evaluation_dataset, json_data, question_id_mapper):
         self._tokenizer = tokenizer
         self._evaluation_dataset = evaluation_dataset
@@ -169,6 +170,11 @@ class PerformanceEvaluator:
             input tensor with shape `(batch_size, context_sequence_length)`
         end : NDArray
             input tensor with shape `(batch_size, context_sequence_length)`
+
+        Returns
+        -------
+        prediction: Tuple
+            Tuple containing first and last token indices of the answer
         """
         begin_hat = begin.reshape(begin.shape + (1,))
         end_hat = end.reshape(end.shape + (1,))

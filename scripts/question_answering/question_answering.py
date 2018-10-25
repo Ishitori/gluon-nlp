@@ -76,6 +76,13 @@ class BiDAFEmbedding(HybridBlock):
                                               dropout=dropout)
 
     def init_embeddings(self, lock_gradients):
+        """Initialize words embeddings with provided embedding values
+
+        Parameters
+        ----------
+        lock_gradients: bool
+            Flag to stop parameters from being trained
+        """
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
 
         if lock_gradients:
@@ -156,6 +163,21 @@ class BiDAFModelingLayer(HybridBlock):
                                         bidirectional=biflag, input_size=800)
 
     def begin_state(self, ctx, batch_sizes=None):
+        """Provides begin state for the layer's modeling_layer block
+
+        Parameters
+        ----------
+        ctx: list[Context]
+            List of contexts to be used
+
+        batch_sizes: list[int]
+            List of batch-sizes per context
+
+        Returns
+        -------
+        state_list: list
+            List of states
+        """
         if batch_sizes is None:
             batch_sizes = [self._batch_size] * len(ctx)
 
@@ -173,7 +195,7 @@ class BiDAFModelingLayer(HybridBlock):
 class BiDAFOutputLayer(HybridBlock):
     """
     ``BiDAFOutputLayer`` produces the final prediction of an answer. The output is a tuple of
-    start index and end index of the answer in the paragraph per each batch.
+    start and end index of token in the paragraph per each batch.
 
     It accepts 2 inputs:
         `x` : the output of Attention layer of shape:
@@ -184,10 +206,10 @@ class BiDAFOutputLayer(HybridBlock):
 
     Parameters
     ----------
+    batch_size : `int`
+        Size of a batch
     span_start_input_dim : `int`, default 100
         The number of features in the hidden state h of LSTM
-    units : `int`, default 4 * ``span_start_input_dim``
-        Number of hidden units of `Dense` layer
     nlayers : `int`, default 1
         Number of recurrent layers.
     biflag: `bool`, default True
@@ -222,6 +244,21 @@ class BiDAFOutputLayer(HybridBlock):
                                          flatten=False)
 
     def begin_state(self, ctx, batch_sizes=None):
+        """Provides begin state for the layer's end_index_lstm block
+
+        Parameters
+        ----------
+        ctx: list[Context]
+            List of contexts to be used
+
+        batch_sizes: list[int]
+            List of batch-sizes per context
+
+        Returns
+        -------
+        state_list: list
+            List of states
+        """
         if batch_sizes is None:
             batch_sizes = [self._batch_size] * len(ctx)
 
@@ -257,14 +294,24 @@ class BiDAFOutputLayer(HybridBlock):
 
 
 class BiDAFModel(HybridBlock):
-    """Bidirectional attention flow model for Question answering
+    """Bidirectional attention flow model for Question answering. Implemented according to the
+    following work:
+
+        @article{DBLP:journals/corr/abs-1804-09541,
+        author    = {Minjoon Seo and
+                    Aniruddha Kembhavi and
+                    Ali Farhadi and
+                    Hannaneh Hajishirzi},
+        title     = {Bidirectional Attention Flow for Machine Comprehension},
+        year      = {2016},
+        url       = {https://arxiv.org/abs/1611.01603}
+    }
     """
     def __init__(self, word_vocab, char_vocab, options, prefix=None, params=None):
         super().__init__(prefix=prefix, params=params)
         self._options = options
 
         with self.name_scope():
-            # contextual embedding layer
             self.ctx_embedding = BiDAFEmbedding(options.batch_size,
                                                 word_vocab,
                                                 char_vocab,
