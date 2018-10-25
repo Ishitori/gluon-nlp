@@ -341,9 +341,9 @@ def run_training(net, dataloader, ctx, options):
                         for dest in destination:
                             source.copyto(dest)
 
-                trainer.update(scailing_coeff, ignore_stale_grad=True)
+                trainer.update(scailing_coeff)
             else:
-                trainer.step(scailing_coeff, ignore_stale_grad=True)
+                trainer.step(scailing_coeff)
 
             if ema is not None:
                 ema.update()
@@ -579,7 +579,7 @@ def run_training_mode(options):
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
     net.cast(options.precision)
     net.initialize(init.Xavier(), ctx=ctx)
-    # net.hybridize(static_alloc=True)
+    net.hybridize()
 
     if options.grad_req_add_mode:
         net.collect_params().setattr('grad_req', 'add')

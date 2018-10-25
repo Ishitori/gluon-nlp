@@ -326,7 +326,12 @@ class BiDAFModel(HybridBlock):
         ctx_mask = cw != 0
 
         passage_question_similarity = self.matrix_attention(ctx_embedding_output,
-                                                            q_embedding_output).sum(axis=-1)
+                                                            q_embedding_output)
+
+        passage_question_similarity = passage_question_similarity.reshape(
+                                                shape=(self._options.batch_size,
+                                                       self._options.ctx_max_len,
+                                                       self._options.q_max_len))
 
         attention_layer_output = self.attention_layer(passage_question_similarity,
                                                       ctx_embedding_output,

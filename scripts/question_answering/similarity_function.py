@@ -160,11 +160,15 @@ class LinearSimilarity(SimilarityFunction):
     def __init__(self,
                  array_1_dim,
                  array_2_dim,
+                 use_bias=False,
                  combination='x,y',
                  activation='linear',
                  **kwargs):
         super(LinearSimilarity, self).__init__(**kwargs)
         self.combination = combination
+        self.use_bias = use_bias
+        self.array_1_dim = array_1_dim
+        self.array_2_dim = array_2_dim
 
         if activation == 'linear':
             self._activation = None
@@ -173,15 +177,17 @@ class LinearSimilarity(SimilarityFunction):
 
         with self.name_scope():
             self.weight_matrix = self.params.get("weight_matrix",
-                                                 shape=(array_1_dim, array_2_dim),
+                                                 shape=(array_2_dim, array_1_dim),
                                                  init=initializer.Uniform())
-            self.bias = self.params.get("bias",
-                                        shape=(array_1_dim,),
-                                        init=initializer.Zero())
+            if use_bias:
+                self.bias = self.params.get("bias",
+                                            shape=(array_2_dim,),
+                                            init=initializer.Zero())
 
-    def hybrid_forward(self, F, array_1, array_2, weight_matrix, bias):
+    def hybrid_forward(self, F, array_1, array_2, weight_matrix, bias=None):
         combined_tensors = combine_tensors(F, self.combination, [array_1, array_2])
-        dot_product = F.batch_dot(combined_tensors, weight_matrix)
+        dot_product = F.FullyConnected(combined_tensors, weight_matrix, bias=bias, flatten=False,
+                                       no_bias=not self.use_bias, num_hidden=self.array_2_dim)
 
         if not self._activation:
             return dot_product
