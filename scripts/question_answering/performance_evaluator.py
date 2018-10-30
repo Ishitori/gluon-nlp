@@ -19,11 +19,12 @@
 
 """Performance evaluator - a proxy class used for plugging in official validation script"""
 import multiprocessing
-from mxnet import nd, gluon
+from mxnet import nd, gluon, cpu
 from mxnet.gluon.data import DataLoader, ArrayDataset
 
 from scripts.question_answering.data_processing import SQuADTransform
 from scripts.question_answering.official_squad_eval_script import evaluate
+from scripts.question_answering.utils import extend_to_batch_size
 
 
 class PerformanceEvaluator:
@@ -56,14 +57,16 @@ class PerformanceEvaluator:
 
         # Allows to ensure that start index is always <= than end index
         for c in ctx:
-            answer_mask_matrix = nd.zeros(shape=(1, options.ctx_max_len, options.ctx_max_len), ctx=c)
+            answer_mask_matrix = nd.zeros(shape=(1, options.ctx_max_len, options.ctx_max_len),
+                                          ctx=cpu(0))
             for idx in range(options.answer_max_len):
                 answer_mask_matrix += nd.eye(N=options.ctx_max_len, M=options.ctx_max_len,
-                                             k=idx, ctx=c)
+                                             k=idx, ctx=cpu(0))
 
         eval_dataset = ArrayDataset([(self._mapper.question_id_to_idx[r[1]], r[2], r[3], r[4], r[5])
                         for r in self._evaluation_dataset])
-        eval_dataloader = DataLoader(eval_dataset, batch_size=options.batch_size,
+        eval_dataloader = DataLoader(eval_dataset,
+                                     batch_size=len(ctx) * options.batch_size,
                                      last_batch='keep',
                                      pin_memory=True,
                                      num_workers=(multiprocessing.cpu_count() - len(ctx) - 2))
@@ -71,11 +74,16 @@ class PerformanceEvaluator:
         for i, data in enumerate(eval_dataloader):
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
 
-            record_index = record_index.astype(options.precision)
-            q_words = q_words.astype(options.precision)
-            ctx_words = ctx_words.astype(options.precision)
-            q_chars = q_chars.astype(options.precision)
-            ctx_chars = ctx_chars.astype(options.precision)
+            record_index = extend_to_batch_size(options.batch_size * len(ctx),
+                                                record_index.astype(options.precision), -1)
+            q_words = extend_to_batch_size(options.batch_size * len(ctx),
+                                           q_words.astype(options.precision))
+            ctx_words = extend_to_batch_size(options.batch_size * len(ctx),
+                                             ctx_words.astype(options.precision))
+            q_chars = extend_to_batch_size(options.batch_size * len(ctx),
+                                           q_chars.astype(options.precision))
+            ctx_chars = extend_to_batch_size(options.batch_size * len(ctx),
+                                             ctx_chars.astype(options.precision))
 
             record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
@@ -103,20 +111,25 @@ class PerformanceEvaluator:
                                  q_embedding_begin_state,
                                  m_layer_begin_state,
                                  o_layer_begin_state)
-                outs.append((begin, end))
+                outs.append((ri.as_in_context(cpu(0)),
+                             begin.as_in_context(cpu(0)),
+                             end.as_in_context(cpu(0))))
 
             for out in outs:
-                start = out[0].softmax(axis=1)
-                end = out[1].softmax(axis=1)
+                ri = out[0]
+                start = out[1].softmax(axis=1)
+                end = out[2].softmax(axis=1)
                 start_end_span = PerformanceEvaluator._get_indices(start, end, answer_mask_matrix)
 
                 # iterate over batches
-                for idx, start_end in zip(data[0], start_end_span):
+                for idx, start_end in zip(ri, start_end_span):
                     idx = int(idx.asscalar())
                     start = int(start_end[0].asscalar())
                     end = int(start_end[1].asscalar())
-                    question_id = self._mapper.idx_to_question_id[idx]
-                    pred[question_id] = (start, end, self.get_text_result(idx, (start, end)))
+
+                    if idx in self._mapper.idx_to_question_id:
+                        question_id = self._mapper.idx_to_question_id[idx]
+                        pred[question_id] = (start, end, self.get_text_result(idx, (start, end)))
 
         if options.save_prediction_path:
             with open(options.save_prediction_path, "w") as f:

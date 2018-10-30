@@ -158,6 +158,28 @@ def get_very_negative_number():
     return -1e30
 
 
+def extend_to_batch_size(batch_size, prototype, fill_value=0):
+    """Provides NDArray, which consist of prototype NDArray and NDArray filled with fill_value to
+    batch_size number of items. New NDArray appended to batch dimension (dim=0).
+
+    Parameters
+    ----------
+    batch_size: ``int``
+        Expected value for batch_size dimension (dim=0).
+    prototype: ``NDArray``
+        NDArray to be extended of shape (batch_size, ...)
+    fill_value: ``float``
+        Value to use for filling
+    """
+    if batch_size == prototype.shape[0]:
+        return prototype
+
+    new_shape = (batch_size - prototype.shape[0], ) + prototype.shape[1:]
+    dummy_elements = nd.full(val=fill_value, shape=new_shape, dtype=prototype.dtype,
+                             ctx=prototype.context)
+    return nd.concat(prototype, dummy_elements, dim=0)
+
+
 def get_combined_dim(combination, tensor_dims):
     """
     For use with :func:`combine_tensors`.  This function computes the resultant dimension when
