@@ -343,7 +343,6 @@ def run_training(net, dataloader, ctx, options):
                options.log_interval > 0 and \
                iteration > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
-                evaluate_options.batch_size = 10
                 evaluate_options.epochs = iteration
                 result = run_evaluate_mode(evaluate_options, net, ema)
 
@@ -387,6 +386,16 @@ def run_training(net, dataloader, ctx, options):
         save_model_parameters(net, e, options)
         save_ema_parameters(ema, e, options)
         save_trainer_parameters(trainer, e, options)
+
+        if options.terminate_training_on_reaching_F1_threshold:
+            evaluate_options = copy.deepcopy(options)
+            evaluate_options.epochs = e
+            result = run_evaluate_mode(evaluate_options, net, ema)
+
+            if result["f1"] >= options.terminate_training_on_reaching_F1_threshold:
+                print("Finishing training on {} epoch, because dev F1 score is >= required {}. {}"
+                      .format(e, options.terminate_training_on_reaching_F1_threshold, result))
+                break
 
     print("Training time {:6.2f} seconds".format(time() - train_start))
 

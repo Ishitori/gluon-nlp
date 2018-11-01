@@ -123,6 +123,11 @@ def get_args():
                              '# of times F1 is lower than max. Should be used with log_interval')
     parser.add_argument('--resume_training', type=int, default=0,
                         help='Resume training from this epoch number')
+    parser.add_argument('--terminate_training_on_reaching_F1_threshold', type=float, default=0,
+                        help='Some tasks, like DAWNBenchmark requires to minimize training time '
+                             'while reaching a particular F1 metric. This parameter controls if '
+                             'training should be terminated as soon as F1 is reached to minimize '
+                             'training time and cost. It would force to do evaluation every epoch.')
     parser.add_argument('--save_dir', type=str, default='out_dir',
                         help='directory path to save the final model and training log')
     parser.add_argument('--word_vocab_path', type=str, default=None,
