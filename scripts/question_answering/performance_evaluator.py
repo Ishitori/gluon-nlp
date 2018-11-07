@@ -74,16 +74,11 @@ class PerformanceEvaluator:
         for i, data in enumerate(eval_dataloader):
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
 
-            record_index = extend_to_batch_size(options.batch_size * len(ctx),
-                                                record_index.astype(options.precision), -1)
-            q_words = extend_to_batch_size(options.batch_size * len(ctx),
-                                           q_words.astype(options.precision))
-            ctx_words = extend_to_batch_size(options.batch_size * len(ctx),
-                                             ctx_words.astype(options.precision))
-            q_chars = extend_to_batch_size(options.batch_size * len(ctx),
-                                           q_chars.astype(options.precision))
-            ctx_chars = extend_to_batch_size(options.batch_size * len(ctx),
-                                             ctx_chars.astype(options.precision))
+            record_index = extend_to_batch_size(options.batch_size * len(ctx), record_index, -1)
+            q_words = extend_to_batch_size(options.batch_size * len(ctx), q_words)
+            ctx_words = extend_to_batch_size(options.batch_size * len(ctx), ctx_words)
+            q_chars = extend_to_batch_size(options.batch_size * len(ctx), q_chars)
+            ctx_chars = extend_to_batch_size(options.batch_size * len(ctx), ctx_chars)
 
             record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
@@ -91,26 +86,11 @@ class PerformanceEvaluator:
             q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
             ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
 
-            ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-            q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-            m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
-            o_layer_begin_state_list = net.output_layer.begin_state(ctx)
-
             outs = []
 
-            for ri, qw, cw, qc, cc, ctx_embedding_begin_state, \
-                q_embedding_begin_state, m_layer_begin_state, \
-                o_layer_begin_state in zip(record_index, q_words, ctx_words,
-                                           q_chars, ctx_chars,
-                                           ctx_embedding_begin_state_list,
-                                           q_embedding_begin_state_list,
-                                           m_layer_begin_state_list,
-                                           o_layer_begin_state_list):
-                begin, end = net(qw, cw, qc, cc,
-                                 ctx_embedding_begin_state,
-                                 q_embedding_begin_state,
-                                 m_layer_begin_state,
-                                 o_layer_begin_state)
+            for ri, qw, cw, qc, cc in zip(record_index, q_words, ctx_words,
+                                          q_chars, ctx_chars):
+                begin, end = net(qw, cw, qc, cc)
                 outs.append((ri.as_in_context(cpu(0)),
                              begin.as_in_context(cpu(0)),
                              end.as_in_context(cpu(0))))

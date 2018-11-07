@@ -209,9 +209,6 @@ def run_training(net, dataloader, ctx, options):
 
     hyperparameters = {'learning_rate': options.lr}
 
-    if options.precision == 'float16' and options.use_multiprecision_in_optimizer:
-        hyperparameters["multi_precision"] = True
-
     if options.rho:
         hyperparameters["rho"] = options.rho
 
@@ -227,13 +224,12 @@ def run_training(net, dataloader, ctx, options):
     ema = None
 
     train_start = time()
-    avg_loss = mx.nd.zeros((1,), ctx=ctx[0], dtype=options.precision)
+    avg_loss = mx.nd.zeros((1,), ctx=ctx[0])
     iteration = 1
     max_dev_exact = -1
     max_dev_f1 = -1
     max_iteration = -1
     early_stop_tries = 0
-    records_per_epoch_count = 0
 
     print("Starting training...")
 
@@ -242,11 +238,6 @@ def run_training(net, dataloader, ctx, options):
         avg_loss *= 0  # Zero average loss of each epoch
         records_per_epoch_count = 0
 
-        ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-        q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-        m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
-        o_layer_begin_state_list = net.output_layer.begin_state(ctx)
-
         for i, (data, label) in enumerate(dataloader):
             # start timing for the first batch of epoch
             if i == 0:
@@ -254,13 +245,6 @@ def run_training(net, dataloader, ctx, options):
 
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
             records_per_epoch_count += record_index.shape[0]
-
-            record_index = record_index.astype(options.precision)
-            q_words = q_words.astype(options.precision)
-            ctx_words = ctx_words.astype(options.precision)
-            q_chars = q_chars.astype(options.precision)
-            ctx_chars = ctx_chars.astype(options.precision)
-            label = label.astype(options.precision)
 
             record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
@@ -271,20 +255,10 @@ def run_training(net, dataloader, ctx, options):
 
             losses = []
 
-            for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
-                q_embedding_begin_state, m_layer_begin_state, \
-                o_layer_begin_state in zip(record_index, q_words, ctx_words,
-                                           q_chars, ctx_chars, label,
-                                           ctx_embedding_begin_state_list,
-                                           q_embedding_begin_state_list,
-                                           m_layer_begin_state_list,
-                                           o_layer_begin_state_list):
+            for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
+                                             q_chars, ctx_chars, label):
                 with autograd.record():
-                    begin, end = net(qw, cw, qc, cc,
-                                     ctx_embedding_begin_state,
-                                     q_embedding_begin_state,
-                                     m_layer_begin_state,
-                                     o_layer_begin_state)
+                    begin, end = net(qw, cw, qc, cc)
                     begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
                     loss = loss_function(begin, begin_end[0]) + \
                            loss_function(end, begin_end[1])
@@ -626,7 +600,6 @@ def run_training_mode(options):
     ctx = get_context(options)
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
-    net.cast(options.precision)
     net.initialize(init.Xavier(), ctx=ctx)
     net.hybridize(static_alloc=True)
 
@@ -764,14 +737,10 @@ def get_args():
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--train_unk_token', default=False, action='store_true',
                         help='Should train unknown token of embedding')
-    parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
-                        help='Use float16 or float32 precision')
     parser.add_argument('--filter_long_context', default=True, action='store_false',
                         help='Filter contexts if the answer is after ctx_max_len')
     parser.add_argument('--save_prediction_path', type=str, default='',
                         help='Path to save predictions')
-    parser.add_argument('--use_multiprecision_in_optimizer', default=True, action='store_false',
-                        help='When using float16, shall optimizer use multiprecision.')
     parser.add_argument('--use_exponential_moving_average', default=True, action='store_false',
                         help='Should averaged copy of parameters been stored and used '
                              'during evaluation.')

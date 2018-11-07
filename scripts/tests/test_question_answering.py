@@ -29,13 +29,14 @@ from types import SimpleNamespace
 
 import gluonnlp as nlp
 from gluonnlp.data import SQuAD
+from scripts.question_answering.attention_flow import AttentionFlow
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
 from scripts.question_answering.exponential_moving_average import PolyakAveraging
 from scripts.question_answering.performance_evaluator import PerformanceEvaluator
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
-from scripts.question_answering.similarity_function import DotProductSimilarity
+from scripts.question_answering.similarity_function import DotProductSimilarity, LinearSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.train_question_answering import get_record_per_answer_span
 
@@ -49,7 +50,7 @@ embedding_size = 100
 @pytest.mark.serial
 def test_transform_to_nd_array():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset, get_args(batch_size))
+    vocab_provider = VocabProvider([dataset], get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
                                  context_max_length, max_chars_per_word, embedding_size)
     record = dataset[0]
@@ -62,7 +63,7 @@ def test_transform_to_nd_array():
 @pytest.mark.serial
 def test_data_loader_able_to_read():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset, get_args(batch_size))
+    vocab_provider = VocabProvider([dataset], get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
                                  context_max_length, max_chars_per_word, embedding_size)
     record = dataset[0]
@@ -85,7 +86,7 @@ def test_data_loader_able_to_read():
 @pytest.mark.serial
 def test_load_vocabs():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset, get_args(batch_size))
+    vocab_provider = VocabProvider([dataset], get_args(batch_size))
 
     assert vocab_provider.get_word_level_vocab(embedding_size) is not None
     assert vocab_provider.get_char_level_vocab() is not None
@@ -93,7 +94,7 @@ def test_load_vocabs():
 
 def test_bidaf_embedding():
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset, get_args(batch_size))
+    vocab_provider = VocabProvider([dataset], get_args(batch_size))
     transformer = SQuADTransform(vocab_provider, question_max_length,
                                  context_max_length, max_chars_per_word, embedding_size)
 
@@ -111,26 +112,17 @@ def test_bidaf_embedding():
     embedding = BiDAFEmbedding(word_vocab=word_vocab,
                                char_vocab=char_vocab,
                                batch_size=batch_size,
-                               max_seq_len=question_max_length,
-                               precision="float16")
-    embedding.cast("float16")
-    embedding.initialize(init.Xavier(magnitude=2.24))
+                               max_seq_len=question_max_length)
+    embedding.initialize(init.Xavier(magnitude=2.24), ctx=mx.cpu_pinned())
     embedding.hybridize(static_alloc=True)
-    state = embedding.begin_state(mx.cpu())
 
-    trainer = Trainer(embedding.collect_params(), "sgd", {"learning_rate": 0.1,
-                                                          "multi_precision": True})
+    trainer = Trainer(embedding.collect_params(), "sgd", {"learning_rate": 0.1})
 
     for i, (data, label) in enumerate(dataloader):
         with autograd.record():
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
-            q_words = q_words.astype("float16")
-            ctx_words = ctx_words.astype("float16")
-            q_chars = q_chars.astype("float16")
-            ctx_chars = ctx_chars.astype("float16")
-            label = label.astype("float16")
             # passing only question_words_nd and question_chars_nd batch
-            out = embedding(q_words, q_chars, state)
+            out = embedding(q_words, q_chars)
             assert out is not None
 
         out.backward()
@@ -139,28 +131,35 @@ def test_bidaf_embedding():
 
 
 def test_attention_layer():
-    ctx_fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 2 * embedding_size),
-                                      dtype="float16")
+    ctx_fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 2 * embedding_size))
 
-    q_fake_data = nd.random.uniform(shape=(batch_size, question_max_length, 2 * embedding_size),
-                                    dtype="float16")
+    q_fake_data = nd.random.uniform(shape=(batch_size, question_max_length, 2 * embedding_size))
 
-    ctx_fake_mask = nd.ones(shape=(batch_size, context_max_length), dtype="float16")
-    q_fake_mask = nd.ones(shape=(batch_size, question_max_length), dtype="float16")
+    ctx_fake_mask = nd.ones(shape=(batch_size, context_max_length))
+    q_fake_mask = nd.ones(shape=(batch_size, question_max_length))
 
-    layer = BidirectionalAttentionFlow(DotProductSimilarity(),
-                                       batch_size,
+    matrix_attention = AttentionFlow(LinearSimilarity(array_1_dim=6 * embedding_size,
+                                                      array_2_dim=1,
+                                                      combination="x,y,x*y"),
+                                     batch_size,
+                                     context_max_length,
+                                     question_max_length,
+                                     2 * embedding_size)
+
+    layer = BidirectionalAttentionFlow(batch_size,
                                        context_max_length,
                                        question_max_length,
-                                       2 * embedding_size,
-                                       "float16")
+                                       2 * embedding_size)
 
-    layer.cast("float16")
+    matrix_attention.initialize()
     layer.initialize()
-    layer.hybridize(static_alloc=True)
 
     with autograd.record():
-        output = layer(ctx_fake_data, q_fake_data, q_fake_mask, ctx_fake_mask)
+        passage_question_similarity = matrix_attention(ctx_fake_data, q_fake_data).reshape(
+            shape=(batch_size, context_max_length, question_max_length))
+
+        output = layer(passage_question_similarity, ctx_fake_data, q_fake_data,
+                       q_fake_mask, ctx_fake_mask)
 
     assert output.shape == (batch_size, context_max_length, 8 * embedding_size)
 
@@ -169,22 +168,18 @@ def test_modeling_layer():
     # The modeling layer receive input in a shape of batch_size x T x 8d
     # T is the sequence length of context which is context_max_length
     # d is the size of embedding, which is embedding_size
-    fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 8 * embedding_size),
-                                  dtype="float16")
+    fake_data = nd.random.uniform(shape=(batch_size, context_max_length, 8 * embedding_size))
     # We assume that attention is already return data in TNC format
     attention_output = nd.transpose(fake_data, axes=(1, 0, 2))
 
-    layer = BiDAFModelingLayer(batch_size, precision="float16")
-    layer.cast("float16")
+    layer = BiDAFModelingLayer(batch_size)
     layer.initialize()
     layer.hybridize(static_alloc=True)
-    state = layer.begin_state(mx.cpu())
 
-    trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": "0.1",
-                                                      "multi_precision": True})
+    trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": "0.1"})
 
     with autograd.record():
-        output = layer(attention_output, state)
+        output = layer(attention_output)
 
     output.backward()
     # According to the paper, the output should be 2d x T
@@ -197,36 +192,30 @@ def test_output_layer():
     # (batch_size, context_max_length, 8 * embedding_size)
 
     # The modeling layer returns data in TNC format
-    modeling_output = nd.random.uniform(shape=(context_max_length, batch_size, 2 * embedding_size),
-                                        dtype="float16")
+    modeling_output = nd.random.uniform(shape=(context_max_length, batch_size, 2 * embedding_size))
     # The layer assumes that attention is already return data in TNC format
-    attention_output = nd.random.uniform(shape=(context_max_length, batch_size, 8 * embedding_size),
-                                         dtype="float16")
+    attention_output = nd.random.uniform(shape=(context_max_length, batch_size, 8 * embedding_size))
+    ctx_mask = nd.ones(shape=(batch_size, context_max_length))
 
-    layer = BiDAFOutputLayer(batch_size, precision="float16")
-    layer.cast("float16")
+    layer = BiDAFOutputLayer(batch_size)
     # The model doesn't need to know the hidden states, so I don't hold variables for the states
     layer.initialize()
     layer.hybridize(static_alloc=True)
-    state = layer.begin_state(mx.cpu())
-
-    trainer = Trainer(layer.collect_params(), "sgd", {"learning_rate": 0.1,
-                                                      "multi_precision": True})
 
     with autograd.record():
-        output = layer(attention_output, modeling_output, state)
+        output = layer(attention_output, modeling_output, ctx_mask)
 
-    output.backward()
     # We expect final numbers as batch_size x 2 (first start index, second end index)
-    assert output.shape == (batch_size, 2, 400)
+    assert output[0].shape == (batch_size, 400) and \
+           output[1].shape == (batch_size, 400)
 
 
 def test_bidaf_model():
     options = get_args(batch_size)
-    ctx = [mx.cpu(0), mx.cpu(1)]
+    ctx = [mx.cpu(0)]
 
     dataset = SQuAD(segment='dev', root='tests/data/squad')
-    vocab_provider = VocabProvider(dataset, options)
+    vocab_provider = VocabProvider([dataset], options)
     transformer = SQuADTransform(vocab_provider, question_max_length,
                                  context_max_length, max_chars_per_word, embedding_size)
 
@@ -235,7 +224,7 @@ def test_bidaf_model():
                                        if i < options.batch_size * len(ctx)])
 
     # need to remove question id before feeding the data to data loader
-    loadable_data, dataloader = get_record_per_answer_span(processed_dataset, options)
+    train_dataset, train_dataloader = get_record_per_answer_span(processed_dataset, options)
 
     word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
     word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
@@ -245,26 +234,14 @@ def test_bidaf_model():
                      char_vocab=char_vocab,
                      options=options)
 
-    net.cast("float16")
     net.initialize(init.Xavier(magnitude=2.24))
     net.hybridize(static_alloc=True)
 
-    ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-    q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
-    m_layer_begin_state_list = net.modeling_layer.begin_state(ctx)
-    o_layer_begin_state_list = net.output_layer.begin_state(ctx)
-
     loss_function = SoftmaxCrossEntropyLoss()
-    trainer = Trainer(net.collect_params(), "adadelta", {"learning_rate": 0.5,
-                                                         "multi_precision": True})
+    trainer = Trainer(net.collect_params(), "adadelta", {"learning_rate": 0.5})
 
-    for i, (data, label) in enumerate(dataloader):
+    for i, (data, label) in enumerate(train_dataloader):
         record_index, q_words, ctx_words, q_chars, ctx_chars = data
-        q_words = q_words.astype("float16")
-        ctx_words = ctx_words.astype("float16")
-        q_chars = q_chars.astype("float16")
-        ctx_chars = ctx_chars.astype("float16")
-        label = label.astype("float16")
 
         record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
         q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
@@ -275,21 +252,13 @@ def test_bidaf_model():
 
         losses = []
 
-        for ri, qw, cw, qc, cc, l, ctx_embedding_begin_state, \
-            q_embedding_begin_state, m_layer_begin_state, \
-            o_layer_begin_state in zip(record_index, q_words, ctx_words,
-                                       q_chars, ctx_chars, label,
-                                       ctx_embedding_begin_state_list,
-                                       q_embedding_begin_state_list,
-                                       m_layer_begin_state_list,
-                                       o_layer_begin_state_list):
+        for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
+                                         q_chars, ctx_chars, label):
             with autograd.record():
-                begin, end = net(qw, cw, qc, cc,
-                                 ctx_embedding_begin_state,
-                                 q_embedding_begin_state,
-                                 m_layer_begin_state,
-                                 o_layer_begin_state)
-                loss = loss_function(begin, end, l)
+                begin, end = net(qw, cw, qc, cc)
+                begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
+                loss = loss_function(begin, begin_end[0]) + \
+                       loss_function(end, begin_end[1])
                 losses.append(loss)
 
         for loss in losses:
@@ -297,40 +266,6 @@ def test_bidaf_model():
 
         trainer.step(options.batch_size)
         break
-
-    nd.waitall()
-
-
-def test_performance_evaluation():
-    options = get_args(batch_size)
-
-    train_dataset = SQuAD(segment='train')
-    vocab_provider = VocabProvider(train_dataset, options)
-
-    dataset = SQuAD(segment='dev')
-    mapper = QuestionIdMapper(dataset)
-
-    transformer = SQuADTransform(vocab_provider, question_max_length,
-                                 context_max_length, max_chars_per_word, embedding_size)
-
-    # for performance reason, process only batch_size # of records
-    transformed_dataset = SimpleDataset([transformer(*record) for i, record in enumerate(dataset)
-                                         if i < options.batch_size])
-
-    word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
-    word_vocab.set_embedding(nlp.embedding.create('glove', source='glove.6B.100d'))
-    char_vocab = vocab_provider.get_char_level_vocab()
-    model_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(int(options.epochs) - 1))
-
-    ctx = [mx.cpu()]
-    evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
-                                     dataset._read_data(), mapper)
-    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
-    net.hybridize(static_alloc=True)
-    net.load_parameters(model_path, ctx=ctx)
-
-    result = evaluator.evaluate_performance(net, ctx, options)
-    print("Evaluation results on dev dataset: {}".format(result))
 
 
 def test_get_answer_spans_exact_match():
@@ -360,14 +295,14 @@ def test_get_answer_spans_partial_match():
     result = SQuADTransform._get_answer_spans(context, context_tokens,
                                               [answer], [answer_start_index])
 
-    assert result == [(16, 17)]
+    assert result == [(15, 16)]
 
 
 def test_get_answer_spans_unicode():
     tokenizer = BiDAFTokenizer()
 
     context = "Back in Warsaw that year, Chopin heard Niccolò Paganini play"
-    context_tokens = tokenizer(context)
+    context_tokens = tokenizer(context, lower_case=True)
 
     answer_start_index = 39
     answer = "Niccolò Paganini"
@@ -382,7 +317,7 @@ def test_get_answer_spans_after_comma():
     tokenizer = BiDAFTokenizer()
 
     context = "Chopin's successes as a composer and performer opened the door to western Europe for him, and on 2 November 1830, he set out,"
-    context_tokens = tokenizer(context)
+    context_tokens = tokenizer(context, lower_case=True)
 
     answer_start_index = 108
     answer = "1830"
@@ -390,7 +325,7 @@ def test_get_answer_spans_after_comma():
     result = SQuADTransform._get_answer_spans(context, context_tokens,
                                               [answer], [answer_start_index])
 
-    assert result == [(23, 23)]
+    assert result == [(22, 22)]
 
 
 def test_get_answer_spans_after_quotes():
@@ -412,9 +347,9 @@ def test_get_answer_spans_after_quotes():
 def test_get_char_indices():
     context = "to Saint Bernadette Soubirous in 1858. At the end of the main drive (and in a direct line that connects through 3 statues and the Gold Dome), is a simple, modern stone statue of Mary."
     tokenizer = BiDAFTokenizer()
-    context_tokens = tokenizer(context)
+    context_tokens = tokenizer(context, lower_case=True)
 
-    result = SQuADTransform._get_char_indices(context, context_tokens)
+    result = SQuADTransform.get_char_indices(context, context_tokens)
     assert len(result) == len(context_tokens)
 
 
@@ -422,7 +357,7 @@ def test_tokenizer_split_new_lines():
     context = "that are of equal energy\u2014i.e., degenerate\u2014is a     configuration termed a spin triplet state. Hence, the ground state of the O\n2 molecule is referred to as triplet oxygen"
 
     tokenizer = BiDAFTokenizer()
-    context_tokens = tokenizer(context)
+    context_tokens = tokenizer(context, lower_case=True)
 
     assert len(context_tokens) == 35
 
@@ -431,7 +366,7 @@ def test_polyak_averaging():
     net = nn.HybridSequential()
     net.add(nn.Dense(5), nn.Dense(3), nn.Dense(2))
     net.initialize(init.Xavier())
-    # net.hybridize()
+    net.hybridize()
 
     ema = None
     loss_fn = SoftmaxCrossEntropyLoss()
@@ -452,6 +387,8 @@ def test_polyak_averaging():
         trainer.step(5)
         ema.update()
 
+    assert ema.get_params() is not None
+
 def get_args(batch_size):
     options = SimpleNamespace()
     options.gpu = None
@@ -466,9 +403,11 @@ def get_args(batch_size):
     options.ctx_max_len = context_max_length
     options.q_max_len = question_max_length
     options.word_max_len = max_chars_per_word
-    options.precision = "float32"
     options.epochs = 12
     options.save_dir = "output/"
     options.filter_long_context = False
+    options.word_vocab_path = ""
+    options.char_vocab_path = ""
+    options.train_unk_token = False
 
     return options

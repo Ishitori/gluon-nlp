@@ -36,7 +36,6 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
                  passage_length,
                  question_length,
                  encoding_dim,
-                 precision,
                  **kwargs):
         super(BidirectionalAttentionFlow, self).__init__(**kwargs)
 
@@ -44,18 +43,11 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         self._passage_length = passage_length
         self._question_length = question_length
         self._encoding_dim = encoding_dim
-        self._precision = precision
 
     def _get_big_negative_value(self):
-        if self._precision == 'float16':
-            return np.finfo(np.float16).min
-        else:
             return np.finfo(np.float32).min
 
     def _get_small_positive_value(self):
-        if self._precision == 'float16':
-            return np.finfo(np.float16).eps
-        else:
             return np.finfo(np.float32).eps
 
     def hybrid_forward(self, F, passage_question_similarity,

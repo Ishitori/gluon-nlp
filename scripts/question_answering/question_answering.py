@@ -42,13 +42,12 @@ class BiDAFEmbedding(HybridBlock):
     """
     def __init__(self, batch_size, word_vocab, char_vocab, max_seq_len,
                  contextual_embedding_nlayers=2, highway_nlayers=2, embedding_size=100,
-                 dropout=0.2, precision='float32', prefix=None, params=None):
+                 dropout=0.2, prefix=None, params=None):
         super(BiDAFEmbedding, self).__init__(prefix=prefix, params=params)
 
         self._word_vocab = word_vocab
         self._batch_size = batch_size
         self._max_seq_len = max_seq_len
-        self._precision = precision
         self._embedding_size = embedding_size
 
         with self.name_scope():
@@ -88,17 +87,7 @@ class BiDAFEmbedding(HybridBlock):
         if lock_gradients:
             self._word_embedding.collect_params().setattr('grad_req', 'null')
 
-    def begin_state(self, ctx, batch_sizes=None):
-        if batch_sizes is None:
-            batch_sizes = [self._batch_size] * len(ctx)
-
-        state_list = [self._contextual_embedding.begin_state(b,
-                                                             dtype=self._precision,
-                                                             ctx=c) for c, b in zip(ctx,
-                                                                                    batch_sizes)]
-        return state_list
-
-    def hybrid_forward(self, F, w, c, contextual_embedding_state, *args):
+    def hybrid_forward(self, F, w, c, *args):
         word_embedded = self._word_embedding(w)
         char_level_data = self._char_dense_embedding(c)
         char_level_data = self._dropout(char_level_data)
@@ -122,8 +111,7 @@ class BiDAFEmbedding(HybridBlock):
         highway_output, _ = F.contrib.foreach(highway, highway_input, [])
 
         # Transpose to TNC - default for LSTM
-        ce_output, ce_state = self._contextual_embedding(highway_output,
-                                                         contextual_embedding_state)
+        ce_output = self._contextual_embedding(highway_output)
         return ce_output
 
 
@@ -152,43 +140,17 @@ class BiDAFModelingLayer(HybridBlock):
         Shared Parameters for this `Block`.
     """
     def __init__(self, batch_size, input_dim=100, nlayers=2, biflag=True,
-                 dropout=0.2, precision='float32', prefix=None, params=None):
+                 dropout=0.2, prefix=None, params=None):
         super(BiDAFModelingLayer, self).__init__(prefix=prefix, params=params)
 
         self._batch_size = batch_size
-        self._precision = precision
 
         with self.name_scope():
             self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
                                         bidirectional=biflag, input_size=800)
 
-    def begin_state(self, ctx, batch_sizes=None):
-        """Provides begin state for the layer's modeling_layer block
-
-        Parameters
-        ----------
-        ctx: list[Context]
-            List of contexts to be used
-
-        batch_sizes: list[int]
-            List of batch-sizes per context
-
-        Returns
-        -------
-        state_list: list
-            List of states
-        """
-        if batch_sizes is None:
-            batch_sizes = [self._batch_size] * len(ctx)
-
-        state_list = [self._modeling_layer.begin_state(b,
-                                                       dtype=self._precision,
-                                                       ctx=c) for c, b in zip(ctx,
-                                                                              batch_sizes)]
-        return state_list
-
-    def hybrid_forward(self, F, x, state, *args):
-        out, _ = self._modeling_layer(x, state)
+    def hybrid_forward(self, F, x, *args):
+        out = self._modeling_layer(x)
         return out
 
 
@@ -223,11 +185,10 @@ class BiDAFOutputLayer(HybridBlock):
         Shared Parameters for this `Block`.
     """
     def __init__(self, batch_size, span_start_input_dim=100, nlayers=1, biflag=True,
-                 dropout=0.2, precision='float32', prefix=None, params=None):
+                 dropout=0.2, prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
         self._batch_size = batch_size
-        self._precision = precision
 
         with self.name_scope():
             self._dropout = nn.Dropout(rate=dropout)
@@ -243,32 +204,7 @@ class BiDAFOutputLayer(HybridBlock):
             self._end_index_m = nn.Dense(units=1, in_units=2 * span_start_input_dim,
                                          flatten=False)
 
-    def begin_state(self, ctx, batch_sizes=None):
-        """Provides begin state for the layer's end_index_lstm block
-
-        Parameters
-        ----------
-        ctx: list[Context]
-            List of contexts to be used
-
-        batch_sizes: list[int]
-            List of batch-sizes per context
-
-        Returns
-        -------
-        state_list: list
-            List of states
-        """
-        if batch_sizes is None:
-            batch_sizes = [self._batch_size] * len(ctx)
-
-        state_list = [self._end_index_lstm.begin_state(b,
-                                                       dtype=self._precision,
-                                                       ctx=c) for c, b in zip(ctx,
-                                                                              batch_sizes)]
-        return state_list
-
-    def hybrid_forward(self, F, x, m, mask, state, *args):  # pylint: disable=arguments-differ
+    def hybrid_forward(self, F, x, m, mask, *args):  # pylint: disable=arguments-differ
         # setting batch size as the first dimension
         x = F.transpose(x, axes=(1, 0, 2))
 
@@ -276,7 +212,7 @@ class BiDAFOutputLayer(HybridBlock):
                                    self._start_index_m(self._dropout(F.transpose(m,
                                                                                  axes=(1, 0, 2))))
 
-        m2, _ = self._end_index_lstm(m, state)
+        m2 = self._end_index_lstm(m)
         end_index_dense_output = self._end_index_g(self._dropout(x)) + \
                                  self._end_index_m(self._dropout(F.transpose(m2,
                                                                              axes=(1, 0, 2))))
@@ -320,7 +256,6 @@ class BiDAFModel(HybridBlock):
                                                 options.highway_num_layers,
                                                 options.embedding_size,
                                                 dropout=options.dropout,
-                                                precision=options.precision,
                                                 prefix="context_embedding")
 
             self.similarity_function = LinearSimilarity(array_1_dim=6 * options.embedding_size,
@@ -337,32 +272,24 @@ class BiDAFModel(HybridBlock):
             self.attention_layer = BidirectionalAttentionFlow(options.batch_size,
                                                               options.ctx_max_len,
                                                               options.q_max_len,
-                                                              2 * options.embedding_size,
-                                                              options.precision)
+                                                              2 * options.embedding_size)
             self.modeling_layer = BiDAFModelingLayer(options.batch_size,
                                                      input_dim=options.embedding_size,
                                                      nlayers=options.modeling_num_layers,
-                                                     dropout=options.dropout,
-                                                     precision=options.precision)
+                                                     dropout=options.dropout)
             self.output_layer = BiDAFOutputLayer(options.batch_size,
                                                  span_start_input_dim=options.embedding_size,
                                                  nlayers=options.output_num_layers,
-                                                 dropout=options.dropout,
-                                                 precision=options.precision)
+                                                 dropout=options.dropout)
 
     def initialize(self, init=initializer.Uniform(), ctx=None, verbose=False,
                    force_reinit=False):
         super(BiDAFModel, self).initialize(init, ctx, verbose, force_reinit)
         self.ctx_embedding.init_embeddings(not self._options.train_unk_token)
 
-    def hybrid_forward(self, F, qw, cw, qc, cc,
-                       ctx_embedding_states=None,
-                       q_embedding_states=None,
-                       modeling_layer_states=None,
-                       output_layer_states=None,
-                       *args):
-        ctx_embedding_output = self.ctx_embedding(cw, cc, ctx_embedding_states)
-        q_embedding_output = self.ctx_embedding(qw, qc, q_embedding_states)
+    def hybrid_forward(self, F, qw, cw, qc, cc, *args):
+        ctx_embedding_output = self.ctx_embedding(cw, cc)
+        q_embedding_output = self.ctx_embedding(qw, qc)
 
         # attention layer expect batch_size x seq_length x channels
         ctx_embedding_output = F.transpose(ctx_embedding_output, axes=(1, 0, 2))
@@ -388,9 +315,8 @@ class BiDAFModel(HybridBlock):
         attention_layer_output = F.transpose(attention_layer_output, axes=(1, 0, 2))
 
         # modeling layer expects seq_length x batch_size x channels
-        modeling_layer_output = self.modeling_layer(attention_layer_output, modeling_layer_states)
+        modeling_layer_output = self.modeling_layer(attention_layer_output)
 
-        output = self.output_layer(attention_layer_output, modeling_layer_output, ctx_mask,
-                                   output_layer_states)
+        output = self.output_layer(attention_layer_output, modeling_layer_output, ctx_mask)
 
         return output
