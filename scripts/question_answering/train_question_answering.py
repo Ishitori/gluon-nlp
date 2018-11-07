@@ -16,6 +16,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import argparse
 import math
 
 import copy
@@ -42,7 +43,7 @@ from scripts.question_answering.performance_evaluator import PerformanceEvaluato
 from scripts.question_answering.question_answering import *
 from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.tokenizer import BiDAFTokenizer
-from scripts.question_answering.utils import logging_config, get_args
+from scripts.question_answering.utils import logging_config
 
 
 def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
@@ -232,12 +233,14 @@ def run_training(net, dataloader, ctx, options):
     max_dev_f1 = -1
     max_iteration = -1
     early_stop_tries = 0
+    records_per_epoch_count = 0
 
     print("Starting training...")
 
     for e in range(0 if not options.resume_training else options.resume_training,
                    options.epochs):
         avg_loss *= 0  # Zero average loss of each epoch
+        records_per_epoch_count = 0
 
         ctx_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
         q_embedding_begin_state_list = net.ctx_embedding.begin_state(ctx)
@@ -250,6 +253,7 @@ def run_training(net, dataloader, ctx, options):
                 e_start = time()
 
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
+            records_per_epoch_count += record_index.shape[0]
 
             record_index = record_index.astype(options.precision)
             q_words = q_words.astype(options.precision)
@@ -378,10 +382,10 @@ def run_training(net, dataloader, ctx, options):
         avg_loss_scalar = avg_loss.asscalar()
         epoch_time = time() - e_start
 
-        print("\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} | "
-              "Time per epoch {:5.2f} seconds"
+        print("\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} "
+              "| throughtput {:5.3f} of samples/sec | Time per epoch {:5.2f} seconds"
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
-                      epoch_time))
+                      records_per_epoch_count / epoch_time, epoch_time))
 
         save_model_parameters(net, e, options)
         save_ema_parameters(ema, e, options)
@@ -694,6 +698,91 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
 
     net.hybridize(static_alloc=True)
     return evaluator.evaluate_performance(net, ctx, options)
+
+
+def get_args():
+    """Get console arguments
+    """
+    parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD')
+    parser.add_argument('--preprocess', default=False, action='store_true',
+                        help='Preprocess dataset')
+    parser.add_argument('--train', default=False, action='store_true',
+                        help='Run training')
+    parser.add_argument('--evaluate', default=False, action='store_true',
+                        help='Run evaluation on dev dataset')
+    parser.add_argument('--preprocessed_dataset_path', type=str,
+                        default="preprocessed_dataset.p", help='Path to preprocessed dataset')
+    parser.add_argument('--preprocessed_val_dataset_path', type=str,
+                        default="preprocessed_val_dataset.p",
+                        help='Path to preprocessed validation dataset')
+    parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
+    parser.add_argument('--embedding_size', type=int, default=100,
+                        help='Dimension of the word embedding')
+    parser.add_argument('--dropout', type=float, default=0.2,
+                        help='dropout applied to layers (0 = no dropout)')
+    parser.add_argument('--ctx_embedding_num_layers', type=int, default=2,
+                        help='Number of layers in Contextual embedding layer of BiDAF')
+    parser.add_argument('--highway_num_layers', type=int, default=2,
+                        help='Number of layers in Highway layer of BiDAF')
+    parser.add_argument('--modeling_num_layers', type=int, default=2,
+                        help='Number of layers in Modeling layer of BiDAF')
+    parser.add_argument('--output_num_layers', type=int, default=1,
+                        help='Number of layers in Output layer of BiDAF')
+    parser.add_argument('--batch_size', type=int, default=60, help='Batch size')
+    parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
+    parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
+    parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
+    parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
+    parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
+    parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
+    parser.add_argument('--rho', type=float, default=0.9,
+                        help='Adadelta decay rate for both squared gradients and delta.')
+    parser.add_argument('--lr_warmup_steps', type=int, default=0,
+                        help='Defines how many iterations to spend on warming up learning rate')
+    parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
+    parser.add_argument('--weight_decay', type=float, default=0,
+                        help='Weight decay for parameter updates')
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+                        help='Report interval applied to last epoch only')
+    parser.add_argument('--early_stop', type=int, default=9,
+                        help='Apply early stopping for the last epoch. Stop after # of consequent '
+                             '# of times F1 is lower than max. Should be used with log_interval')
+    parser.add_argument('--resume_training', type=int, default=0,
+                        help='Resume training from this epoch number')
+    parser.add_argument('--terminate_training_on_reaching_F1_threshold', type=float, default=0,
+                        help='Some tasks, like DAWNBenchmark requires to minimize training time '
+                             'while reaching a particular F1 metric. This parameter controls if '
+                             'training should be terminated as soon as F1 is reached to minimize '
+                             'training time and cost. It would force to do evaluation every epoch.')
+    parser.add_argument('--save_dir', type=str, default='out_dir',
+                        help='directory path to save the final model and training log')
+    parser.add_argument('--word_vocab_path', type=str, default=None,
+                        help='Path to preprocessed word-level vocabulary')
+    parser.add_argument('--char_vocab_path', type=str, default=None,
+                        help='Path to preprocessed character-level vocabulary')
+    parser.add_argument('--gpu', type=str, default=None,
+                        help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
+    parser.add_argument('--train_unk_token', default=False, action='store_true',
+                        help='Should train unknown token of embedding')
+    parser.add_argument('--precision', type=str, default='float32', choices=['float16', 'float32'],
+                        help='Use float16 or float32 precision')
+    parser.add_argument('--filter_long_context', default=True, action='store_false',
+                        help='Filter contexts if the answer is after ctx_max_len')
+    parser.add_argument('--save_prediction_path', type=str, default='',
+                        help='Path to save predictions')
+    parser.add_argument('--use_multiprecision_in_optimizer', default=True, action='store_false',
+                        help='When using float16, shall optimizer use multiprecision.')
+    parser.add_argument('--use_exponential_moving_average', default=True, action='store_false',
+                        help='Should averaged copy of parameters been stored and used '
+                             'during evaluation.')
+    parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
+                        help='Weight decay used in exponential moving average')
+    parser.add_argument('--grad_req_add_mode', type=int, default=0,
+                        help='Enable rolling gradient mode, where batch size is always 1 and '
+                             'gradients are accumulated using single GPU')
+
+    args = parser.parse_args()
+    return args
 
 
 if __name__ == "__main__":
