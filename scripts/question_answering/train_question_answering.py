@@ -17,23 +17,20 @@
 # specific language governing permissions and limitations
 # under the License.
 import argparse
-import math
-
 import copy
+import math
 import multiprocessing
-import os
-from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
-from os.path import isfile
-
 import logging
+import os
+from os.path import isfile
 import pickle
-
 from time import time
 
 import mxnet as mx
 from mxnet import gluon, init, autograd
 from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
+from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
 from gluonnlp.data import SQuAD
 

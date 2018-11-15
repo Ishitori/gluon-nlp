@@ -16,10 +16,11 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import os
 
 import inspect
 import logging
+import os
+
 import mxnet as mx
 from mxnet import nd, gluon
 
