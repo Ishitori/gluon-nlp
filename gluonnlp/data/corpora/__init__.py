@@ -20,10 +20,11 @@
 # pylint: disable=wildcard-import
 """Corpora."""
 
-from . import (google_billion_word, text8, wikitext)
+from . import (google_billion_word, large_text_compression_benchmark, wikitext)
 
 from .google_billion_word import *
-from .text8 import *
+from .large_text_compression_benchmark import *
 from .wikitext import *
 
-__all__ = (google_billion_word.__all__ + text8.__all__ + wikitext.__all__)
+__all__ = (google_billion_word.__all__ +
+           large_text_compression_benchmark.__all__ + wikitext.__all__)

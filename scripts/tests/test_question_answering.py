@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import gluonnlp as nlp
 from gluonnlp.data import SQuAD
+
 from scripts.question_answering.attention_flow import AttentionFlow
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
@@ -39,6 +40,7 @@ from scripts.question_answering.question_id_mapper import QuestionIdMapper
 from scripts.question_answering.similarity_function import DotProductSimilarity, LinearSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.train_question_answering import get_record_per_answer_span
+
 
 batch_size = 5
 question_max_length = 30
