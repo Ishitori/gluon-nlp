@@ -18,11 +18,10 @@
 # under the License.
 
 """BiDAF model blocks"""
-from scripts.question_answering.attention_flow import AttentionFlow
-from scripts.question_answering.bidaf import BidirectionalAttentionFlow
-from scripts.question_answering.similarity_function import DotProductSimilarity, CosineSimilarity, \
-    LinearSimilarity
-from scripts.question_answering.utils import get_very_negative_number
+from .attention_flow import AttentionFlow
+from .bidaf import BidirectionalAttentionFlow
+from .similarity_function import LinearSimilarity
+from .utils import get_very_negative_number
 
 __all__ = ['BiDAFEmbedding', 'BiDAFModelingLayer', 'BiDAFOutputLayer', 'BiDAFModel']
 
@@ -97,7 +96,6 @@ class BiDAFEmbedding(HybridBlock):
 
         def convolute(token_of_all_batches, _):
             return self._char_conv_embedding(token_of_all_batches), []
-
         char_embedded, _ = F.contrib.foreach(convolute, char_level_data, [])
 
         # Transpose to TNC, to join with character embedding
@@ -140,14 +138,14 @@ class BiDAFModelingLayer(HybridBlock):
         Shared Parameters for this `Block`.
     """
     def __init__(self, batch_size, input_dim=100, nlayers=2, biflag=True,
-                 dropout=0.2, prefix=None, params=None):
+                 dropout=0.2, input_size=800, prefix=None, params=None):
         super(BiDAFModelingLayer, self).__init__(prefix=prefix, params=params)
 
         self._batch_size = batch_size
 
         with self.name_scope():
             self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
-                                        bidirectional=biflag, input_size=800)
+                                        bidirectional=biflag, input_size=input_size)
 
     def hybrid_forward(self, F, x, *args):
         out = self._modeling_layer(x)
@@ -192,30 +190,30 @@ class BiDAFOutputLayer(HybridBlock):
 
         with self.name_scope():
             self._dropout = nn.Dropout(rate=dropout)
-            self._start_index_g = nn.Dense(units=1, in_units=8 * span_start_input_dim,
-                                           flatten=False)
-            self._start_index_m = nn.Dense(units=1, in_units=2 * span_start_input_dim,
-                                           flatten=False)
+            self._start_index_combined = nn.Dense(units=1, in_units=8 * span_start_input_dim,
+                                                  flatten=False)
+            self._start_index_model = nn.Dense(units=1, in_units=2 * span_start_input_dim,
+                                               flatten=False)
             self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
                                         num_layers=nlayers, dropout=dropout, bidirectional=biflag,
                                         input_size=2 * span_start_input_dim)
-            self._end_index_g = nn.Dense(units=1, in_units=8 * span_start_input_dim,
-                                         flatten=False)
-            self._end_index_m = nn.Dense(units=1, in_units=2 * span_start_input_dim,
-                                         flatten=False)
+            self._end_index_combined = nn.Dense(units=1, in_units=8 * span_start_input_dim,
+                                                flatten=False)
+            self._end_index_model = nn.Dense(units=1, in_units=2 * span_start_input_dim,
+                                             flatten=False)
 
     def hybrid_forward(self, F, x, m, mask, *args):  # pylint: disable=arguments-differ
         # setting batch size as the first dimension
         x = F.transpose(x, axes=(1, 0, 2))
 
-        start_index_dense_output = self._start_index_g(self._dropout(x)) + \
-                                   self._start_index_m(self._dropout(F.transpose(m,
-                                                                                 axes=(1, 0, 2))))
+        start_index_dense_output = self._start_index_combined(self._dropout(x)) + \
+                                   self._start_index_model(self._dropout(
+                                       F.transpose(m, axes=(1, 0, 2))))
 
         m2 = self._end_index_lstm(m)
-        end_index_dense_output = self._end_index_g(self._dropout(x)) + \
-                                 self._end_index_m(self._dropout(F.transpose(m2,
-                                                                             axes=(1, 0, 2))))
+        end_index_dense_output = self._end_index_combined(self._dropout(x)) + \
+                                 self._end_index_model(self._dropout(F.transpose(m2,
+                                                                                 axes=(1, 0, 2))))
 
         start_index_dense_output = F.squeeze(start_index_dense_output)
         start_index_dense_output_masked = start_index_dense_output + ((1 - mask) *

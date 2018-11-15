@@ -37,13 +37,13 @@ from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
 
 from gluonnlp.data import SQuAD
 
-from scripts.question_answering.data_processing import VocabProvider, SQuADTransform
-from scripts.question_answering.exponential_moving_average import PolyakAveraging
-from scripts.question_answering.performance_evaluator import PerformanceEvaluator
-from scripts.question_answering.question_answering import *
-from scripts.question_answering.question_id_mapper import QuestionIdMapper
-from scripts.question_answering.tokenizer import BiDAFTokenizer
-from scripts.question_answering.utils import logging_config
+from .data_processing import VocabProvider, SQuADTransform
+from .utils import PolyakAveraging
+from .performance_evaluator import PerformanceEvaluator
+from .question_answering import *
+from .question_id_mapper import QuestionIdMapper
+from .tokenizer import BiDAFTokenizer
+from .utils import logging_config
 
 
 def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
@@ -288,7 +288,7 @@ def run_training(net, dataloader, ctx, options):
                 if options.grad_req_add_mode == 0 else options.grad_req_add_mode
 
             if options.lr_warmup_steps:
-                trainer.set_learning_rate(get_learning_rate_per_iteration(iteration, options))
+                trainer.set_learning_rate(warm_up_steps(iteration, options))
 
             if options.clip or options.train_unk_token:
                 trainer.allreduce_grads()
@@ -378,7 +378,7 @@ def run_training(net, dataloader, ctx, options):
     print("Training time {:6.2f} seconds".format(time() - train_start))
 
 
-def get_learning_rate_per_iteration(iteration, options):
+def warm_up_steps(iteration, options):
     """Returns learning rate based on current iteration. Used to implement learning rate warm up
     technique
 
@@ -601,7 +601,7 @@ def run_training_mode(options):
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
     net.initialize(init.Xavier(), ctx=ctx)
-    net.hybridize(static_alloc=True)
+#    net.hybridize(static_alloc=True)
 
     if options.grad_req_add_mode:
         net.collect_params().setattr('grad_req', 'add')

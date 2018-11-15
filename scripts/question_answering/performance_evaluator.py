@@ -22,9 +22,9 @@ import multiprocessing
 from mxnet import nd, gluon, cpu
 from mxnet.gluon.data import DataLoader, ArrayDataset
 
-from scripts.question_answering.data_processing import SQuADTransform
-from scripts.question_answering.official_squad_eval_script import evaluate
-from scripts.question_answering.utils import extend_to_batch_size
+from .data_processing import SQuADTransform
+from .official_squad_eval_script import evaluate
+from .utils import extend_to_batch_size
 
 
 class PerformanceEvaluator:

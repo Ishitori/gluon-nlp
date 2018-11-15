@@ -33,11 +33,9 @@ from gluonnlp.data import SQuAD
 from scripts.question_answering.attention_flow import AttentionFlow
 from scripts.question_answering.bidaf import BidirectionalAttentionFlow
 from scripts.question_answering.data_processing import SQuADTransform, VocabProvider
-from scripts.question_answering.exponential_moving_average import PolyakAveraging
-from scripts.question_answering.performance_evaluator import PerformanceEvaluator
+from scripts.question_answering.utils import PolyakAveraging
 from scripts.question_answering.question_answering import *
-from scripts.question_answering.question_id_mapper import QuestionIdMapper
-from scripts.question_answering.similarity_function import DotProductSimilarity, LinearSimilarity
+from scripts.question_answering.similarity_function import LinearSimilarity
 from scripts.question_answering.tokenizer import BiDAFTokenizer
 from scripts.question_answering.train_question_answering import get_record_per_answer_span
 

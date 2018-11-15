@@ -19,13 +19,12 @@
 
 # pylint: disable=
 """SQuAD data preprocessing."""
-import logging
 import pickle
 
 from os.path import isfile
 
 import gluonnlp as nlp
-from scripts.question_answering.tokenizer import BiDAFTokenizer
+from .tokenizer import BiDAFTokenizer
 
 __all__ = ['SQuADTransform', 'VocabProvider']
 

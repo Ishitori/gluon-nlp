@@ -20,7 +20,6 @@
 from mxnet import gluon
 import numpy as np
 
-from .attention_flow import AttentionFlow
 from .utils import last_dim_softmax, weighted_sum, replace_masked_values, masked_softmax
 
 
