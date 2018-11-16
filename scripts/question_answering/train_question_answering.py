@@ -269,7 +269,7 @@ def run_training(net, dataloader, ctx, options):
                                       options.exponential_moving_average_weight_decay)
 
                 if options.resume_training:
-                    path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(
+                    path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(
                         options.resume_training - 1))
                     ema.get_params().load(path)
 
@@ -358,8 +358,7 @@ def run_training(net, dataloader, ctx, options):
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       records_per_epoch_count / epoch_time, epoch_time))
 
-        save_model_parameters(net, e, options)
-        save_ema_parameters(ema, e, options)
+        save_model_parameters(net.collect_params() if ema is None else ema.get_params(), e, options)
         save_trainer_parameters(trainer, e, options)
 
         if options.terminate_training_on_reaching_F1_threshold:
@@ -458,12 +457,12 @@ def is_fixed_embedding_layer(name):
     return True if "predefined_embedding_layer" in name else False
 
 
-def save_model_parameters(net, epoch, options):
+def save_model_parameters(params, epoch, options):
     """Save parameters of the trained model
 
     Parameters
     ----------
-    net : `Block`
+    params : `gluon.ParameterDict`
         Model with trained parameters
     epoch : `int`
         Number of epoch
@@ -474,29 +473,7 @@ def save_model_parameters(net, epoch, options):
         os.mkdir(options.save_dir)
 
     save_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(epoch))
-    net.save_parameters(save_path)
-
-
-def save_ema_parameters(ema, epoch, options):
-    """Save exponentially averaged parameters of the trained model
-
-    Parameters
-    ----------
-    ema : `PolyakAveraging`
-        Model with trained parameters
-    epoch : `int`
-        Number of epoch
-    options : `Namespace`
-        Saving arguments
-    """
-    if ema is None:
-        return
-
-    if not os.path.exists(options.save_dir):
-        os.mkdir(options.save_dir)
-
-    save_path = os.path.join(options.save_dir, 'ema_epoch{:d}.params'.format(epoch))
-    ema.get_params().save(save_path)
+    params.save(save_path)
 
 
 def save_trainer_parameters(trainer, epoch, options):
@@ -617,6 +594,10 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
 
     Parameters
     ----------
+    existing_net : `Block`
+        Trained existing network
+    existing_net : `PolyakAveraging`
+        Averaged parameters of the network
     options : `Namespace`
         Model evaluation arguments
 
@@ -645,27 +626,16 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
 
-    if options.use_exponential_moving_average:
-        if existing_ema is None:
-            params_path = os.path.join(options.save_dir,
-                                       'ema_epoch{:d}.params'.format(int(options.epochs) - 1))
-        else:
-            save_ema_parameters(existing_ema, options.epochs, options)
-            params_path = os.path.join(options.save_dir,
-                                       'ema_epoch{:d}.params'.format(options.epochs))
+    if existing_ema is not None:
+        save_model_parameters(existing_ema.get_params(), options.epochs, options)
 
-        net.collect_params().load(params_path, ctx=ctx)
-    else:
-        if existing_net is None:
-            params_path = os.path.join(options.save_dir,
-                                       'epoch{:d}.params'.format(int(options.epochs) - 1))
-        else:
-            save_model_parameters(existing_net, options.epochs, options)
-            params_path = os.path.join(options.save_dir,
-                                       'epoch{:d}.params'.format(options.epochs))
+    elif existing_net is not None:
+        save_model_parameters(existing_net.collect_params(), options.epochs, options)
 
-        net.load_parameters(params_path, ctx=ctx)
+    params_path = os.path.join(options.save_dir,
+                               'epoch{:d}.params'.format(int(options.epochs) - 1))
 
+    net.collect_params().load(params_path, ctx=ctx)
     net.hybridize(static_alloc=True)
     return evaluator.evaluate_performance(net, ctx, options)
 

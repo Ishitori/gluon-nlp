@@ -73,18 +73,16 @@ class BiDAFEmbedding(HybridBlock):
                                               bidirectional=True, input_size=2 * embedding_size,
                                               dropout=dropout)
 
-    def init_embeddings(self, lock_gradients):
+    def init_embeddings(self, grad_req='null'):
         """Initialize words embeddings with provided embedding values
 
         Parameters
         ----------
-        lock_gradients: bool
-            Flag to stop parameters from being trained
+        grad_req: str
+            How to treat gradients of embedding layer
         """
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
-
-        if lock_gradients:
-            self._word_embedding.collect_params().setattr('grad_req', 'null')
+        self._word_embedding.collect_params().setattr('grad_req', grad_req)
 
     def hybrid_forward(self, F, w, c, *args):
         word_embedded = self._word_embedding(w)
@@ -283,7 +281,7 @@ class BiDAFModel(HybridBlock):
     def initialize(self, init=initializer.Uniform(), ctx=None, verbose=False,
                    force_reinit=False):
         super(BiDAFModel, self).initialize(init, ctx, verbose, force_reinit)
-        self.ctx_embedding.init_embeddings(not self._options.train_unk_token)
+        self.ctx_embedding.init_embeddings('null' if not self._options.train_unk_token else 'write')
 
     def hybrid_forward(self, F, qw, cw, qc, cc, *args):
         ctx_embedding_output = self.ctx_embedding(cw, cc)
