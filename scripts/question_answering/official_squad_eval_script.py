@@ -28,6 +28,21 @@ import sys
 
 
 def f1_score(prediction, ground_truth):
+    """Calculate F1 score
+
+    Parameters
+    ----------
+    prediction : str
+        Prediction
+
+    ground_truth : str
+        Ground truth
+
+    Returns
+    -------
+    F1 : float
+        F1 score
+    """
     prediction_tokens = normalize_answer(prediction).split()
     ground_truth_tokens = normalize_answer(ground_truth).split()
     common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
@@ -71,6 +86,21 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
 
 
 def evaluate(dataset, predictions):
+    """Evaluate dataset against predictions
+
+    Parameters
+    ----------
+    dataset : `dict`
+        Dictionary containing JSON of SQuAD 1.1 dataset
+
+    predictions : `dict`
+        Map of Question id and prediction
+
+    Returns
+    -------
+    result : `dict`
+        Dictionary with F1 and Exact Match scores
+    """
     f1 = exact_match = total = 0
     for article in dataset:
         for paragraph in article['paragraphs']:
@@ -107,7 +137,7 @@ if __name__ == '__main__':
             print('Evaluation expects v-' + expected_version +
                   ', but got dataset with v-' + dataset_json['version'],
                   file=sys.stderr)
-        dataset = dataset_json['data']
+        dataset_data = dataset_json['data']
     with open(args.prediction_file) as prediction_file:
-        predictions = json.load(prediction_file)
-    print(json.dumps(evaluate(dataset, predictions)))
+        predictions_json = json.load(prediction_file)
+    print(json.dumps(evaluate(dataset_data, predictions_json)))

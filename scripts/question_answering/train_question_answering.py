@@ -16,6 +16,9 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
+"""Main script to train BiDAF model"""
+
 import argparse
 import copy
 import math
@@ -37,7 +40,7 @@ from gluonnlp.data import SQuAD
 from .data_processing import VocabProvider, SQuADTransform
 from .utils import PolyakAveraging
 from .performance_evaluator import PerformanceEvaluator
-from .question_answering import *
+from .question_answering import BiDAFModel
 from .question_id_mapper import QuestionIdMapper
 from .tokenizer import BiDAFTokenizer
 from .utils import logging_config
@@ -66,6 +69,7 @@ def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
     transformer = SQuADTransform(vocab_provider, options.q_max_len,
                                  options.ctx_max_len, options.word_max_len, options.embedding_size)
 
+    i = 0
     transformed_records = []
     long_context = 0
     long_question = 0
@@ -87,7 +91,7 @@ def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
         transformed_records.append(transformed_record)
 
     processed_dataset = SimpleDataset(transformed_records)
-    print("{}/{} records left. Too long context {}, too long query {}".format(
+    print('{}/{} records left. Too long context {}, too long query {}'.format(
         len(processed_dataset), i + 1, long_context, long_question))
     return processed_dataset
 
@@ -138,7 +142,7 @@ def get_record_per_answer_span(processed_dataset, options):
                             num_workers=(multiprocessing.cpu_count() -
                                          len(get_context(options)) - 2))
 
-    print("Total records for training: {}".format(len(labels)))
+    print('Total records for training: {}'.format(len(labels)))
     return loadable_data, dataloader
 
 
@@ -207,10 +211,10 @@ def run_training(net, dataloader, ctx, options):
     hyperparameters = {'learning_rate': options.lr}
 
     if options.rho:
-        hyperparameters["rho"] = options.rho
+        hyperparameters['rho'] = options.rho
 
     trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters,
-                      kvstore="device", update_on_kvstore=False)
+                      kvstore='device', update_on_kvstore=False)
 
     if options.resume_training:
         path = os.path.join(options.save_dir,
@@ -228,10 +232,11 @@ def run_training(net, dataloader, ctx, options):
     max_iteration = -1
     early_stop_tries = 0
 
-    print("Starting training...")
+    print('Starting training...')
 
     for e in range(0 if not options.resume_training else options.resume_training,
                    options.epochs):
+        i = 0
         avg_loss *= 0  # Zero average loss of each epoch
         records_per_epoch_count = 0
 
@@ -252,8 +257,8 @@ def run_training(net, dataloader, ctx, options):
 
             losses = []
 
-            for ri, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
-                                             q_chars, ctx_chars, label):
+            for _, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
+                                            q_chars, ctx_chars, label):
                 with autograd.record():
                     begin, end = net(qw, cw, qc, cc)
                     begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
@@ -277,68 +282,45 @@ def run_training(net, dataloader, ctx, options):
             # predefined number of grad_req_add_mode which acts like batch_size counter
             if options.grad_req_add_mode > 0:
                 if not iteration % options.grad_req_add_mode != 0 and \
-                       iteration != len(dataloader):
+                        iteration != len(dataloader):
                     iteration += 1
                     continue
-
-            scailing_coeff = len(ctx) * options.batch_size \
-                if options.grad_req_add_mode == 0 else options.grad_req_add_mode
 
             if options.lr_warmup_steps:
                 trainer.set_learning_rate(warm_up_steps(iteration, options))
 
-            if options.clip or options.train_unk_token:
-                trainer.allreduce_grads()
-                gradients = get_gradients(net, ctx[0], options)
-
-                if options.clip:
-                    gluon.utils.clip_global_norm(gradients, options.clip)
-
-                if options.train_unk_token:
-                    reset_embedding_gradients(net, ctx[0])
-
-                if len(ctx) > 1:
-                    # in multi gpu mode we propagate new gradients to the rest of gpus
-                    for name, parameter in net.collect_params().items():
-                        grads = parameter.list_grad()
-                        source = grads[0]
-                        destination = grads[1:]
-
-                        for dest in destination:
-                            source.copyto(dest)
-
-                trainer.update(scailing_coeff)
-            else:
-                trainer.step(scailing_coeff)
+            execute_trainer_step(net, trainer, ctx, options)
 
             if ema is not None:
                 ema.update()
 
             if e == options.epochs - 1 and \
-               options.log_interval > 0 and \
-               iteration > 0 and iteration % options.log_interval == 0:
+                    options.log_interval > 0 and \
+                    iteration > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
                 evaluate_options.epochs = iteration
-                result = run_evaluate_mode(evaluate_options, net, ema)
+                eval_result = run_evaluate_mode(evaluate_options, net, ema)
 
-                print("Iteration {} evaluation results on dev dataset: {}".format(iteration,
-                                                                                  result))
-                if options.early_stop:
-                    if result["f1"] > max_dev_f1:
-                        max_dev_f1 = result["f1"]
-                        max_dev_exact = result["exact_match"]
-                        max_iteration = iteration
-                        early_stop_tries = 0
+                print('Iteration {} evaluation results on dev dataset: {}'.format(iteration,
+                                                                                  eval_result))
+                if not options.early_stop:
+                    continue
+
+                if eval_result['f1'] > max_dev_f1:
+                    max_dev_f1 = eval_result['f1']
+                    max_dev_exact = eval_result['exact_match']
+                    max_iteration = iteration
+                    early_stop_tries = 0
+                else:
+                    early_stop_tries += 1
+                    if early_stop_tries < options.early_stop:
+                        print('Results decreased for {} times'.format(early_stop_tries))
                     else:
-                        if early_stop_tries < options.early_stop:
-                            early_stop_tries += 1
-                            print("Results decreased for {} times".format(early_stop_tries))
-                        else:
-                            print("Results decreased for {} times. Stop training. "
-                                  "Best results are stored at {} params file. F1={}, EM={}"\
-                                  .format(options.early_stop + 1, max_iteration,
-                                          max_dev_f1, max_dev_exact))
-                            break
+                        print('Results decreased for {} times. Stop training. '
+                              'Best results are stored at {} params file. F1={}, EM={}' \
+                              .format(options.early_stop + 1, max_iteration,
+                                      max_dev_f1, max_dev_exact))
+                        break
 
             for l in losses:
                 avg_loss += l.mean().as_in_context(avg_loss.context)
@@ -353,8 +335,8 @@ def run_training(net, dataloader, ctx, options):
         avg_loss_scalar = avg_loss.asscalar()
         epoch_time = time() - e_start
 
-        print("\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} "
-              "| throughtput {:5.3f} of samples/sec | Time per epoch {:5.2f} seconds"
+        print('\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} '
+              '| throughtput {:5.3f} of samples/sec | Time per epoch {:5.2f} seconds'
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       records_per_epoch_count / epoch_time, epoch_time))
 
@@ -364,14 +346,14 @@ def run_training(net, dataloader, ctx, options):
         if options.terminate_training_on_reaching_F1_threshold:
             evaluate_options = copy.deepcopy(options)
             evaluate_options.epochs = e
-            result = run_evaluate_mode(evaluate_options, net, ema)
+            eval_result = run_evaluate_mode(evaluate_options, net, ema)
 
-            if result["f1"] >= options.terminate_training_on_reaching_F1_threshold:
-                print("Finishing training on {} epoch, because dev F1 score is >= required {}. {}"
-                      .format(e, options.terminate_training_on_reaching_F1_threshold, result))
+            if eval_result['f1'] >= options.terminate_training_on_reaching_F1_threshold:
+                print('Finishing training on {} epoch, because dev F1 score is >= required {}. {}'
+                      .format(e, options.terminate_training_on_reaching_F1_threshold, eval_result))
                 break
 
-    print("Training time {:6.2f} seconds".format(time() - train_start))
+    print('Training time {:6.2f} seconds'.format(time() - train_start))
 
 
 def warm_up_steps(iteration, options):
@@ -454,7 +436,49 @@ def is_fixed_embedding_layer(name):
     name : `str`
         Layer name to check
     """
-    return True if "predefined_embedding_layer" in name else False
+    return True if 'predefined_embedding_layer' in name else False
+
+
+def execute_trainer_step(net, trainer, ctx, options):
+    """Does training step if doesn't need to do gradient clipping or train unknown symbols.
+
+    Parameters
+    ----------
+    net : `Block`
+        Network to train
+    trainer : `Trainer`
+        Trainer
+    ctx: list
+        Context list
+    options: `SimpleNamespace`
+        Training options
+    """
+    scailing_coeff = len(ctx) * options.batch_size \
+        if options.grad_req_add_mode == 0 else options.grad_req_add_mode
+
+    if options.clip or options.train_unk_token:
+        trainer.allreduce_grads()
+        gradients = get_gradients(net, ctx[0], options)
+
+        if options.clip:
+            gluon.utils.clip_global_norm(gradients, options.clip)
+
+        if options.train_unk_token:
+            reset_embedding_gradients(net, ctx[0])
+
+        if len(ctx) > 1:
+            # in multi gpu mode we propagate new gradients to the rest of gpus
+            for _, parameter in net.collect_params().items():
+                grads = parameter.list_grad()
+                source = grads[0]
+                destination = grads[1:]
+
+                for dest in destination:
+                    source.copyto(dest)
+
+        trainer.update(scailing_coeff)
+    else:
+        trainer.step(scailing_coeff)
 
 
 def save_model_parameters(params, epoch, options):
@@ -508,7 +532,7 @@ def save_transformed_dataset(dataset, path):
     path : `str`
         Saving path
     """
-    pickle.dump(dataset, open(path, "wb"))
+    pickle.dump(dataset, open(path, 'wb'))
 
 
 def load_transformed_dataset(path):
@@ -524,7 +548,7 @@ def load_transformed_dataset(path):
     processed_dataset : SimpleDataset
         Transformed dataset
     """
-    processed_dataset = pickle.load(open(path, "rb"))
+    processed_dataset = pickle.load(open(path, 'rb'))
     return processed_dataset
 
 
@@ -569,11 +593,11 @@ def run_training_mode(options):
                                                 enable_filtering=True)
         save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
 
-    train_dataset, train_dataloader = get_record_per_answer_span(transformed_dataset, options)
+    _, train_dataloader = get_record_per_answer_span(transformed_dataset, options)
     word_vocab, char_vocab = get_vocabs(vocab_provider, options=options)
     ctx = get_context(options)
 
-    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
+    net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
     net.initialize(init.Xavier(), ctx=ctx)
     net.hybridize(static_alloc=True)
 
@@ -581,7 +605,7 @@ def run_training_mode(options):
         net.collect_params().setattr('grad_req', 'add')
 
     if options.resume_training:
-        print("Resuming training from {} epoch".format(options.resume_training))
+        print('Resuming training from {} epoch'.format(options.resume_training))
         params_path = os.path.join(options.save_dir,
                                    'epoch{:d}.params'.format(int(options.resume_training) - 1))
         net.load_parameters(params_path, ctx)
@@ -624,7 +648,7 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
     evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
                                      dataset._read_data(), mapper)
 
-    net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
+    net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
 
     if existing_ema is not None:
         save_model_parameters(existing_ema.get_params(), options.epochs, options)
@@ -651,9 +675,9 @@ def get_args():
     parser.add_argument('--evaluate', default=False, action='store_true',
                         help='Run evaluation on dev dataset')
     parser.add_argument('--preprocessed_dataset_path', type=str,
-                        default="preprocessed_dataset.p", help='Path to preprocessed dataset')
+                        default='preprocessed_dataset.p', help='Path to preprocessed dataset')
     parser.add_argument('--preprocessed_val_dataset_path', type=str,
-                        default="preprocessed_val_dataset.p",
+                        default='preprocessed_val_dataset.p',
                         help='Path to preprocessed validation dataset')
     parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
@@ -717,11 +741,11 @@ def get_args():
                         help='Enable rolling gradient mode, where batch size is always 1 and '
                              'gradients are accumulated using single GPU')
 
-    args = parser.parse_args()
-    return args
+    options = parser.parse_args()
+    return options
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = get_args()
     args.batch_size = int(args.batch_size / len(get_context(args)))
     print(args)
@@ -729,18 +753,17 @@ if __name__ == "__main__":
 
     if args.preprocess:
         if not args.preprocessed_dataset_path:
-            logging.error("Preprocessed_data_path attribute is not provided")
+            logging.error('Preprocessed_data_path attribute is not provided')
             exit(1)
 
-        print("Running in preprocessing mode")
+        print('Running in preprocessing mode')
         run_preprocess_mode(args)
 
     if args.train:
-        print("Running in training mode")
+        print('Running in training mode')
         run_training_mode(args)
 
     if args.evaluate:
-        print("Running in evaluation mode")
+        print('Running in evaluation mode')
         result = run_evaluate_mode(args)
-        print("Evaluation results on dev dataset: {}".format(result))
-
+        print('Evaluation results on dev dataset: {}'.format(result))

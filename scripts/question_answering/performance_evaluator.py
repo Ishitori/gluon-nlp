@@ -56,7 +56,7 @@ class PerformanceEvaluator:
         pred = {}
 
         # Allows to ensure that start index is always <= than end index
-        for c in ctx:
+        for _ in ctx:
             answer_mask_matrix = nd.zeros(shape=(1, options.ctx_max_len, options.ctx_max_len),
                                           ctx=cpu(0))
             for idx in range(options.answer_max_len):
@@ -64,14 +64,14 @@ class PerformanceEvaluator:
                                              k=idx, ctx=cpu(0))
 
         eval_dataset = ArrayDataset([(self._mapper.question_id_to_idx[r[1]], r[2], r[3], r[4], r[5])
-                        for r in self._evaluation_dataset])
+                                     for r in self._evaluation_dataset])
         eval_dataloader = DataLoader(eval_dataset,
                                      batch_size=len(ctx) * options.batch_size,
                                      last_batch='keep',
                                      pin_memory=True,
                                      num_workers=(multiprocessing.cpu_count() - len(ctx) - 2))
 
-        for i, data in enumerate(eval_dataloader):
+        for data in eval_dataloader:
             record_index, q_words, ctx_words, q_chars, ctx_chars = data
 
             record_index = extend_to_batch_size(options.batch_size * len(ctx), record_index, -1)
@@ -112,9 +112,9 @@ class PerformanceEvaluator:
                         pred[question_id] = (start, end, self.get_text_result(idx, (start, end)))
 
         if options.save_prediction_path:
-            with open(options.save_prediction_path, "w") as f:
+            with open(options.save_prediction_path, 'w') as f:
                 for item in pred.items():
-                    f.write("{}: {}-{} Answer: {}\n".format(item[0], item[1][0],
+                    f.write('{}: {}-{} Answer: {}\n'.format(item[0], item[1][0],
                                                             item[1][1], item[1][2]))
 
         return evaluate(self._json_data['data'], {k: v[2] for k, v in pred.items()})

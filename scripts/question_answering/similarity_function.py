@@ -17,6 +17,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+"""Collection of general purpose similarity functions"""
+
 import mxnet as mx
 from mxnet import gluon, initializer
 from mxnet.gluon import nn, Parameter
@@ -37,7 +39,7 @@ class SimilarityFunction(gluon.HybridBlock):
     """
     default_implementation = 'dot_product'
 
-    def hybrid_forward(self, F, array_1, array_2):
+    def hybrid_forward(self, F, array_1, array_2):  # pylint: disable=arguments-differ
         # pylint: disable=arguments-differ
         """
         Takes two tensors of the same shape, such as ``(batch_size, length_1, length_2,
@@ -109,9 +111,9 @@ class BilinearSimilarity(SimilarityFunction):
                  activation='linear',
                  **kwargs):
         super(BilinearSimilarity, self).__init__(**kwargs)
-        self._weight_matrix = Parameter(name="weight_matrix",
+        self._weight_matrix = Parameter(name='weight_matrix',
                                         shape=(array_1_dim, array_2_dim), init=mx.init.Xavier())
-        self._bias = Parameter(name="bias", shape=(array_1_dim,), init=mx.init.Zero())
+        self._bias = Parameter(name='bias', shape=(array_1_dim,), init=mx.init.Zero())
 
         if activation == 'linear':
             self._activation = None
@@ -176,15 +178,16 @@ class LinearSimilarity(SimilarityFunction):
             self._activation = nn.Activation(activation)
 
         with self.name_scope():
-            self.weight_matrix = self.params.get("weight_matrix",
+            self.weight_matrix = self.params.get('weight_matrix',
                                                  shape=(array_2_dim, array_1_dim),
                                                  init=initializer.Uniform())
             if use_bias:
-                self.bias = self.params.get("bias",
+                self.bias = self.params.get('bias',
                                             shape=(array_2_dim,),
                                             init=initializer.Zero())
 
     def hybrid_forward(self, F, array_1, array_2, weight_matrix, bias=None):
+        # pylint: disable=arguments-differ
         combined_tensors = combine_tensors(F, self.combination, [array_1, array_2])
         dot_product = F.FullyConnected(combined_tensors, weight_matrix, bias=bias, flatten=False,
                                        no_bias=not self.use_bias, num_hidden=self.array_2_dim)

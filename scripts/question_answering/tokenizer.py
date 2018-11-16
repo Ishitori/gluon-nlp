@@ -16,8 +16,11 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import nltk
+
+"""Tokenizer for SQuAD dataset"""
+
 import re
+import nltk
 
 
 class BiDAFTokenizer:
@@ -39,7 +42,7 @@ class BiDAFTokenizer:
         """
         sample = sample.replace('\n', ' ').replace(u'\u000A', '').replace(u'\u00A0', '')
 
-        tokens = [token.replace("''", '"').replace("``", '"') for token in
+        tokens = [token.replace('\'\'', '"').replace('``', '"') for token in
                   nltk.word_tokenize(sample)]
         tokens = BiDAFTokenizer._process_tokens(tokens)
         tokens = [token for token in tokens if len(token) > 0]
@@ -64,10 +67,10 @@ class BiDAFTokenizer:
             List of updated tokens
         """
         tokens = []
-        splitters = ("-", "\u2212", "\u2014", "\u2013", "/", "~", '"', "'", "\u201C",
-                     "\u2019", "\u201D", "\u2018", "\u00B0")
+        splitters = ('-', '\u2212', '\u2014', '\u2013', '/', '~', '"', '\'', '\u201C',
+                     '\u2019', '\u201D', '\u2018', '\u00B0')
 
         for token in temp_tokens:
-            tokens.extend(re.split("([{}])".format("".join(splitters)), token))
+            tokens.extend(re.split('([{}])'.format(''.join(splitters)), token))
 
         return tokens

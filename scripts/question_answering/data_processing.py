@@ -19,27 +19,25 @@
 
 # pylint: disable=
 """SQuAD data preprocessing."""
-import pickle
-
-from os.path import isfile
-
-import gluonnlp as nlp
-from .tokenizer import BiDAFTokenizer
 
 __all__ = ['SQuADTransform', 'VocabProvider']
 
+import pickle
+from os.path import isfile
 import numpy as np
-
 from mxnet import nd
 
+import gluonnlp as nlp
 from gluonnlp import Vocab, data
 from gluonnlp.data.batchify import Pad
+from .tokenizer import BiDAFTokenizer
 
 
 class SQuADTransform(object):
     """SQuADTransform class responsible for converting text data into NDArrays that can be later
     feed into DataProvider
     """
+
     def __init__(self, vocab_provider, question_max_length, context_max_length,
                  max_chars_per_word, embedding_size):
         self._word_vocab = vocab_provider.get_word_level_vocab(embedding_size)
@@ -149,14 +147,14 @@ class SQuADTransform(object):
                     answer_token_indices.append(context_token_index)
 
             if len(answer_token_indices) == 0:
-                print("Warning: Answer {} not found for context {}".format(answer, context))
+                print('Warning: Answer {} not found for context {}'.format(answer, context))
             else:
                 answer_span = (answer_token_indices[0],
                                answer_token_indices[len(answer_token_indices) - 1])
                 answer_spans.append(answer_span)
 
         if len(answer_spans) == 0:
-            print("Warning: No answers found for context {}".format(context_tokens))
+            print('Warning: No answers found for context {}'.format(context_tokens))
 
         return answer_spans
 
@@ -248,6 +246,7 @@ class SQuADTransform(object):
 class VocabProvider(object):
     """Provides word level and character level vocabularies
     """
+
     def __init__(self, datasets, options, tokenizer=BiDAFTokenizer()):
         self._datasets = datasets
         self._options = options
@@ -273,7 +272,7 @@ class VocabProvider(object):
             Character level vocabulary
         """
         if self._options.char_vocab_path and isfile(self._options.char_vocab_path):
-            return pickle.load(open(self._options.char_vocab_path, "rb"))
+            return pickle.load(open(self._options.char_vocab_path, 'rb'))
 
         all_chars = []
         for dataset in self._datasets:
@@ -282,7 +281,7 @@ class VocabProvider(object):
         char_level_vocab = VocabProvider._create_squad_vocab(all_chars)
 
         if self._options.char_vocab_path:
-            pickle.dump(char_level_vocab, open(self._options.char_vocab_path, "wb"))
+            pickle.dump(char_level_vocab, open(self._options.char_vocab_path, 'wb'))
 
         return char_level_vocab
 
@@ -296,7 +295,7 @@ class VocabProvider(object):
         """
 
         if self._options.word_vocab_path and isfile(self._options.word_vocab_path):
-            return pickle.load(open(self._options.word_vocab_path, "rb"))
+            return pickle.load(open(self._options.word_vocab_path, 'rb'))
 
         all_words = []
         for dataset in self._datasets:
@@ -312,10 +311,10 @@ class VocabProvider(object):
             if (word_level_vocab.embedding.idx_to_vec[i].sum() != 0).asscalar():
                 count += 1
 
-        print("{}/{} words have embeddings".format(count, len(word_level_vocab)))
+        print('{}/{} words have embeddings'.format(count, len(word_level_vocab)))
 
         if self._options.word_vocab_path:
-            pickle.dump(word_level_vocab, open(self._options.word_vocab_path, "wb"))
+            pickle.dump(word_level_vocab, open(self._options.word_vocab_path, 'wb'))
 
         return word_level_vocab
 

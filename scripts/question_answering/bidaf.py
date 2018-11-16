@@ -17,6 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+"""Bidirectional attention flow layer"""
 from mxnet import gluon
 import numpy as np
 
@@ -28,8 +29,8 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
     This class implements Minjoon Seo's `Bidirectional Attention Flow model
     <https://www.semanticscholar.org/paper/Bidirectional-Attention-Flow-for-Machine-Seo-Kembhavi/7586b7cca1deba124af80609327395e613a20e9d>`_
     for answering reading comprehension questions (ICLR 2017).
-
     """
+
     def __init__(self,
                  batch_size,
                  passage_length,
@@ -44,16 +45,26 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         self._encoding_dim = encoding_dim
 
     def _get_big_negative_value(self):
-            return np.finfo(np.float32).min
+        """Provides maximum negative Float32 value
+        Returns
+        -------
+        value : float32
+            Maximum negative float32 value
+        """
+        return np.finfo(np.float32).min
 
     def _get_small_positive_value(self):
-            return np.finfo(np.float32).eps
+        """Provides minimal possible Float32 value
+        Returns
+        -------
+        value : float32
+            Minimal float32 value
+        """
+        return np.finfo(np.float32).eps
 
     def hybrid_forward(self, F, passage_question_similarity,
                        encoded_passage, encoded_question, question_mask, passage_mask):
         # pylint: disable=arguments-differ
-        """
-        """
         # Shape: (batch_size, passage_length, question_length)
         passage_question_similarity_shape = (self._batch_size, self._passage_length,
                                              self._question_length)

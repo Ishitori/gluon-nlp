@@ -17,6 +17,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+"""Set of utility methods for question answering models"""
+
 import inspect
 import logging
 import os
@@ -95,7 +97,7 @@ def extend_to_batch_size(batch_size, prototype, fill_value=0):
     if batch_size == prototype.shape[0]:
         return prototype
 
-    new_shape = (batch_size - prototype.shape[0], ) + prototype.shape[1:]
+    new_shape = (batch_size - prototype.shape[0],) + prototype.shape[1:]
     dummy_elements = nd.full(val=fill_value, shape=new_shape, dtype=prototype.dtype,
                              ctx=prototype.context)
     return nd.concat(prototype, dummy_elements, dim=0)
@@ -127,8 +129,6 @@ def _get_combination_dim(combination, tensor_dims):
         return tensor_dims[index]
     else:
         first_tensor_dim = _get_combination_dim(combination[0], tensor_dims)
-        second_tensor_dim = _get_combination_dim(combination[2], tensor_dims)
-        operation = combination[1]
         return first_tensor_dim
 
 
@@ -249,7 +249,7 @@ def _last_dimension_applicator(F,
 
     if mask is not None:
         shape_difference = len(tensor_shape) - len(mask_shape)
-        for i in range(0, shape_difference):
+        for _ in range(0, shape_difference):
             mask = mask.expand_dims(1)
         mask = mask.broadcast_to(shape=tensor_shape)
         mask = mask.reshape(shape=(-1, mask_shape[-1]))
@@ -270,8 +270,8 @@ def last_dim_softmax(F, tensor, mask, tensor_shape, mask_shape, epsilon):
 def last_dim_log_softmax(F, tensor, mask, tensor_shape, mask_shape):
     """
     Takes a tensor with 3 or more dimensions and does a masked log softmax over the last dimension.
-    We assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask (if given)
-    has shape ``(batch_size, sequence_length)``.
+    We assume the tensor has shape ``(batch_size, ..., sequence_length)`` and that the mask
+    (if given) has shape ``(batch_size, sequence_length)``.
     """
     return _last_dimension_applicator(F, masked_log_softmax, tensor, mask, tensor_shape, mask_shape)
 
@@ -330,6 +330,7 @@ def replace_masked_values(F, tensor, mask, replace_with):
 class PolyakAveraging:
     """Class to do Polyak averaging based on this paper
     http://www.meyn.ece.ufl.edu/archive/spm_files/Courses/ECE555-2011/555media/poljud92.pdf"""
+
     def __init__(self, params, decay):
         self._params = params
         self._decay = decay

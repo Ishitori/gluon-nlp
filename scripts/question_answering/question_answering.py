@@ -18,10 +18,6 @@
 # under the License.
 
 """BiDAF model blocks"""
-from .attention_flow import AttentionFlow
-from .bidaf import BidirectionalAttentionFlow
-from .similarity_function import LinearSimilarity
-from .utils import get_very_negative_number
 
 __all__ = ['BiDAFEmbedding', 'BiDAFModelingLayer', 'BiDAFOutputLayer', 'BiDAFModel']
 
@@ -31,6 +27,11 @@ from mxnet.gluon import nn
 from mxnet.gluon.rnn import LSTM
 
 from gluonnlp.model import ConvolutionalEncoder, Highway
+
+from .attention_flow import AttentionFlow
+from .bidaf import BidirectionalAttentionFlow
+from .similarity_function import LinearSimilarity
+from .utils import get_very_negative_number
 
 
 class BiDAFEmbedding(HybridBlock):
@@ -63,7 +64,7 @@ class BiDAFEmbedding(HybridBlock):
                 output_size=None
             )
 
-            self._word_embedding = nn.Embedding(prefix="predefined_embedding_layer",
+            self._word_embedding = nn.Embedding(prefix='predefined_embedding_layer',
                                                 input_dim=len(word_vocab),
                                                 output_dim=embedding_size)
 
@@ -84,7 +85,7 @@ class BiDAFEmbedding(HybridBlock):
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
         self._word_embedding.collect_params().setattr('grad_req', grad_req)
 
-    def hybrid_forward(self, F, w, c, *args):
+    def hybrid_forward(self, F, w, c, *args):  # pylint: disable=arguments-differ
         word_embedded = self._word_embedding(w)
         char_level_data = self._char_dense_embedding(c)
         char_level_data = self._dropout(char_level_data)
@@ -145,7 +146,7 @@ class BiDAFModelingLayer(HybridBlock):
             self._modeling_layer = LSTM(hidden_size=input_dim, num_layers=nlayers, dropout=dropout,
                                         bidirectional=biflag, input_size=input_size)
 
-    def hybrid_forward(self, F, x, *args):
+    def hybrid_forward(self, F, x, *args):  # pylint: disable=arguments-differ
         out = self._modeling_layer(x)
         return out
 
@@ -252,11 +253,11 @@ class BiDAFModel(HybridBlock):
                                                 options.highway_num_layers,
                                                 options.embedding_size,
                                                 dropout=options.dropout,
-                                                prefix="context_embedding")
+                                                prefix='context_embedding')
 
             self.similarity_function = LinearSimilarity(array_1_dim=6 * options.embedding_size,
                                                         array_2_dim=1,
-                                                        combination="x,y,x*y")
+                                                        combination='x,y,x*y')
 
             self.matrix_attention = AttentionFlow(self.similarity_function,
                                                   options.batch_size,
@@ -283,7 +284,7 @@ class BiDAFModel(HybridBlock):
         super(BiDAFModel, self).initialize(init, ctx, verbose, force_reinit)
         self.ctx_embedding.init_embeddings('null' if not self._options.train_unk_token else 'write')
 
-    def hybrid_forward(self, F, qw, cw, qc, cc, *args):
+    def hybrid_forward(self, F, qw, cw, qc, cc, *args):  # pylint: disable=arguments-differ
         ctx_embedding_output = self.ctx_embedding(cw, cc)
         q_embedding_output = self.ctx_embedding(qw, qc)
 
@@ -299,15 +300,16 @@ class BiDAFModel(HybridBlock):
                                                             q_embedding_output)
 
         passage_question_similarity = passage_question_similarity.reshape(
-                                                shape=(self._options.batch_size,
-                                                       self._options.ctx_max_len,
-                                                       self._options.q_max_len))
+            shape=(self._options.batch_size,
+                   self._options.ctx_max_len,
+                   self._options.q_max_len))
 
         attention_layer_output = self.attention_layer(passage_question_similarity,
                                                       ctx_embedding_output,
                                                       q_embedding_output,
                                                       q_mask,
                                                       ctx_mask)
+
         attention_layer_output = F.transpose(attention_layer_output, axes=(1, 0, 2))
 
         # modeling layer expects seq_length x batch_size x channels

@@ -17,6 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+"""Attention Flow Layer"""
 from mxnet import gluon
 
 from .similarity_function import DotProductSimilarity
