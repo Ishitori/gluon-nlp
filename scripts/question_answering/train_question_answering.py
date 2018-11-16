@@ -575,7 +575,7 @@ def run_training_mode(options):
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix="bidaf")
     net.initialize(init.Xavier(), ctx=ctx)
-#    net.hybridize(static_alloc=True)
+    net.hybridize(static_alloc=True)
 
     if options.grad_req_add_mode:
         net.collect_params().setattr('grad_req', 'add')
