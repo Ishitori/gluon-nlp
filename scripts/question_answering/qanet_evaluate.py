@@ -3,8 +3,6 @@ In the evaluate function, we use the offical evaluate function as core function.
 
 offical evaluate.py file can be find in the SQuAD dataset offcial web.
 """
-import json
-
 from mxnet import autograd, nd
 from tqdm import tqdm
 
@@ -28,7 +26,7 @@ for idx in range(MAX_ANSWER_LENS):
         N=1000, M=1000, k=idx, ctx=ctx)
 
 
-def evaluate(model, dataloader, dataset, original_json_data, ema=None):
+def evaluate(model, dataloader, dataset, original_json_data, ema=None, padding_token_idx=1):
     r"""Evaluate the model on train/dev/test dataset.
 
     This function is just an encapsulation of official evaluate function.
@@ -57,11 +55,11 @@ def evaluate(model, dataloader, dataset, original_json_data, ema=None):
         context_char = context_char.as_in_context(ctx)
         query_char = query_char.as_in_context(ctx)
 
-        context_mask = context > 0
-        query_mask = query > 0
+        context_mask = context > padding_token_idx
+        query_mask = query > padding_token_idx
 
-        raw_context = [dataset[x.asscalar()][8] for x in idxs]
-        spans = [dataset[x.asscalar()][9] for x in idxs]
+        raw_context = [dataset.get_record_by_idx(x.asscalar())[8] for x in idxs]
+        spans = [dataset.get_record_by_idx(x.asscalar())[9] for x in idxs]
 
         begin_hat, end_hat, _, _ = model(
             context, query, context_char, query_char, context_mask, query_mask, None, None)
@@ -113,11 +111,5 @@ def format_answer(answer_span_pair, context, sp):
     begin = int(answer_span_pair[0].asscalar())
     end = int(answer_span_pair[1].asscalar())
 
-    print(begin)
-    print(end)
-    print(sp)
-    print(sp[begin][0])
-    print(sp[end][1])
-    print(context)
-
-    return context[sp[begin][0]:sp[end][1]]
+    prediction_text = context[sp[begin][0]:sp[end][1]]
+    return prediction_text

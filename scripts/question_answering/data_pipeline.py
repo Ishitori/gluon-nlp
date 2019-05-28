@@ -361,10 +361,10 @@ class SQuADQADataset(Dataset):
     def __init__(self, data):
         super().__init__()
         self._data = data
-        self._record_idx_to_q_id = {}
+        self._record_idx_to_record = {}
 
         for record in data:
-            self._record_idx_to_q_id[record[0]] = record[1]
+            self._record_idx_to_record[record[1]] = {'q_id': record[0], 'rec': record}
 
     def __getitem__(self, idx):
         return self._data[idx]
@@ -373,7 +373,10 @@ class SQuADQADataset(Dataset):
         return len(self._data)
 
     def get_q_id_by_rec_idx(self, rec_idx):
-        return self._record_idx_to_q_id[rec_idx]
+        return self._record_idx_to_record[rec_idx]['q_id']
+
+    def get_record_by_idx(self, rec_idx):
+        return self._record_idx_to_record[rec_idx]['rec']
 
 
 class SQuADDataLoaderTransformer:

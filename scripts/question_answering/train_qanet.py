@@ -65,14 +65,14 @@ global_step = LAST_GLOBAL_STEP
 
 
 def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
-          loss_function, ema=None, total_batches=0):
+          loss_function, ema=None, total_batches=0, padding_token_idx=1):
     r"""
     Train and save.
     """
     for e in tqdm(range(EPOCHS)):
         print('Begin %d/%d epoch...' % (e + 1, EPOCHS))
         train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data,
-                        trainer, loss_function, ema, total_batches)
+                        trainer, loss_function, ema, total_batches, padding_token_idx)
 
         # save model after train one epoch
         model.save_parameters(SAVE_MODEL_PREFIX_NAME +
@@ -90,7 +90,7 @@ def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, t
 
 
 def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
-                    loss_function, ema=None, total_batches=0):
+                    loss_function, ema=None, total_batches=0, padding_token_idx=1):
     r"""
     One train loop.
     """
@@ -104,13 +104,14 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
         if global_step % EVALUATE_INTERVAL == 0:
             print('global_step == %d' % global_step)
             print('evaluating dev dataset...')
-            f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json_data, ema)
+            f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json_data, ema,
+                                          padding_token_idx)
             print('dev f1:' + str(f1_score) + 'em:' + str(em_score))
             dev_f1.append([global_step, f1_score])
             dev_em.append([global_step, em_score])
 
-        c_mask = context > 0
-        q_mask = query > 0
+        c_mask = context > padding_token_idx
+        q_mask = query > padding_token_idx
         batch_sizes = context.shape[0]
 
         context = gluon.utils.split_and_load(data=context, ctx_list=CTX)
@@ -195,7 +196,7 @@ def main():
     train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
         pipeline.get_processed_data()
 
-    model = QANet()
+    model = QANet(len(word_vocab), len(char_vocab))
     # initial parameters
     print('Initial parameters...')
     if NEED_LOAD_TRAINED_MODEL:
@@ -234,14 +235,16 @@ def main():
         # train
         print('Train...')
         train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json, trainer,
-              loss_function, ema, total_batches=len(train_dataset) // TRAIN_BATCH_SIZE)
+              loss_function, ema, total_batches=len(train_dataset) // TRAIN_BATCH_SIZE,
+              padding_token_idx=word_vocab[word_vocab.padding_token])
     else:
         print('Evaluating dev set...')
         dev_dataloader = DataLoader(dev_dataset.transform(SQuADDataLoaderTransformer()),
                                     batch_size=TRAIN_BATCH_SIZE, shuffle=False, last_batch='keep',
                                     num_workers=multiprocessing.cpu_count(), pin_memory=True)
 
-        f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json, ema=None)
+        f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json, ema=None,
+                                      padding_token_idx=word_vocab[word_vocab.padding_token])
         print('The dev dataset F1 is:%s, and EM is: %s' % (f1_score, em_score))
 
 

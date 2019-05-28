@@ -130,7 +130,7 @@ class QANet(gluon.HybridBlock):
 
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, corpus_words_count, corpus_chars_count, **kwargs):
         super(QANet, self).__init__(**kwargs)
         with self.name_scope():
             self.flatten = gluon.nn.Flatten()
@@ -165,7 +165,7 @@ class QANet(gluon.HybridBlock):
         with self.word_emb.name_scope():
             self.word_emb.add(
                 gluon.nn.Embedding(
-                    input_dim=CORPUS_WORDS,
+                    input_dim=corpus_words_count,
                     output_dim=DIM_WORD_EMBED
                 )
             )
@@ -176,7 +176,7 @@ class QANet(gluon.HybridBlock):
         with self.char_emb.name_scope():
             self.char_emb.add(
                 gluon.nn.Embedding(
-                    input_dim=CORPUS_CHARACTERS,
+                    input_dim=corpus_chars_count,
                     output_dim=DIM_CHAR_EMBED,
                     weight_initializer=Normal(sigma=0.1)
                 )
