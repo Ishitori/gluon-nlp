@@ -323,6 +323,7 @@ class BiDAFModel(HybridBlock):
     def __init__(self, word_vocab, char_vocab, options, prefix=None, params=None):
         super(BiDAFModel, self).__init__(prefix=prefix, params=params)
         self._options = options
+        self._padding_token_idx = word_vocab[word_vocab.padding_token]
 
         with self.name_scope():
             self.ctx_embedding = BiDAFEmbedding(word_vocab,
@@ -370,8 +371,8 @@ class BiDAFModel(HybridBlock):
         q_embedding_output = F.transpose(q_embedding_output, axes=(1, 0, 2))
 
         # Both masks can be None
-        q_mask = qw != 0
-        ctx_mask = cw != 0
+        q_mask = qw > self._padding_token_idx
+        ctx_mask = cw > self._padding_token_idx
 
         passage_question_similarity = self.matrix_attention(ctx_embedding_output,
                                                             q_embedding_output)

@@ -19,13 +19,9 @@
 
 """Main script to train BiDAF model"""
 
-import argparse
 import copy
-import math
 import multiprocessing
 import os
-from os.path import isfile
-import pickle
 from time import time
 
 import mxnet as mx
@@ -34,14 +30,14 @@ from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
-from gluonnlp.data import SQuAD
+from scripts.question_answering.bidaf_config import get_args
+from scripts.question_answering.bidaf_tokenizer import BiDAFTokenizer
+from scripts.question_answering.data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
+from scripts.question_answering.utils import warm_up_lr
 
 from .data_processing import VocabProvider, SQuADTransform
 from .ema import ExponentialMovingAverage
-from .performance_evaluator import PerformanceEvaluator
 from .bidaf_model import BiDAFModel
-from .question_id_mapper import QuestionIdMapper
-from .tokenizer import BiDAFTokenizer
 
 
 def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
@@ -191,14 +187,14 @@ def get_context(options):
     return ctx
 
 
-def run_training(net, dataloader, ctx, options):
+def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, options):
     """Main function to do training of the network
 
     Parameters
     ----------
     net : `Block`
         Network to train
-    dataloader : `DataLoader`
+    train_dataloader : `DataLoader`
         Initialized dataloader
     ctx: `Context`
         Training context
@@ -211,8 +207,7 @@ def run_training(net, dataloader, ctx, options):
     if options.rho:
         hyperparameters['rho'] = options.rho
 
-    trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters,
-                      kvstore='device', update_on_kvstore=False)
+    trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters, kvstore='device')
 
     if options.resume_training:
         path = os.path.join(options.save_dir,
@@ -237,64 +232,50 @@ def run_training(net, dataloader, ctx, options):
         i = 0
         avg_loss *= 0  # Zero average loss of each epoch
         records_per_epoch_count = 0
+        e_start = time()
 
-        for i, (data, label) in enumerate(dataloader):
-            # start timing for the first batch of epoch
-            if i == 0:
-                e_start = time()
-
-            record_index, q_words, ctx_words, q_chars, ctx_chars = data
-            records_per_epoch_count += record_index.shape[0]
-
-            record_index = gluon.utils.split_and_load(record_index, ctx, even_split=False)
+        for i, (r_idx, ctx_words, q_words, ctx_chars, q_chars, start, end) in enumerate(train_dataloader):
+            records_per_epoch_count += r_idx.shape[0]
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
             ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
             q_chars = gluon.utils.split_and_load(q_chars, ctx, even_split=False)
             ctx_chars = gluon.utils.split_and_load(ctx_chars, ctx, even_split=False)
-            label = gluon.utils.split_and_load(label, ctx, even_split=False)
+            start = gluon.utils.split_and_load(start, ctx, even_split=False)
+            end = gluon.utils.split_and_load(end, ctx, even_split=False)
 
             losses = []
 
-            for _, qw, cw, qc, cc, l in zip(record_index, q_words, ctx_words,
-                                            q_chars, ctx_chars, label):
+            for qw, cw, qc, cc, s, ee in zip(q_words, ctx_words, q_chars, ctx_chars, start, end):
                 with autograd.record():
-                    begin, end = net(qw, cw, qc, cc)
-                    begin_end = l.split(axis=1, num_outputs=2, squeeze_axis=1)
-                    loss = loss_function(begin, begin_end[0]) + \
-                           loss_function(end, begin_end[1])
+                    begin_hat, end_hat = net(qw, cw, qc, cc)
+                    loss = loss_function(begin_hat, s) + loss_function(end_hat, ee)
                     losses.append(loss)
 
             for loss in losses:
                 loss.backward()
 
             if iteration == 1 and options.use_exponential_moving_average:
-                ema = ExponentialMovingAverage(net.collect_params(),
-                                               options.exponential_moving_average_weight_decay)
+                ema = ExponentialMovingAverage(options.exponential_moving_average_weight_decay)
+
+                for name, param in net.collect_params().items():
+                    ema.add(name, param.data(ctx[0]))
 
                 if options.resume_training:
                     path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(
                         options.resume_training - 1))
                     ema.get_params().load(path)
 
-            # in special mode we collect gradients and apply processing only after
-            # predefined number of grad_req_add_mode which acts like batch_size counter
-            if options.grad_req_add_mode > 0:
-                if not iteration % options.grad_req_add_mode != 0 and \
-                        iteration != len(dataloader):
-                    iteration += 1
-                    continue
-
             if options.lr_warmup_steps:
-                trainer.set_learning_rate(warm_up_steps(iteration, options))
+                trainer.set_learning_rate(warm_up_lr(options.lr, iteration, options.lr_warmup_steps,
+                                                     options.resume_training))
 
             execute_trainer_step(net, trainer, ctx, options)
 
             if ema is not None:
-                ema.update()
+                for name, param in net.collect_params().items():
+                    ema(name, param.data(ctx[0]))
 
-            if e == options.epochs - 1 and \
-                    options.log_interval > 0 and \
-                    iteration > 0 and iteration % options.log_interval == 0:
+            if options.log_interval > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
                 evaluate_options.epochs = iteration
                 eval_result = run_evaluate_mode(evaluate_options, net, ema)
@@ -352,28 +333,6 @@ def run_training(net, dataloader, ctx, options):
                 break
 
     print('Training time {:6.2f} seconds'.format(time() - train_start))
-
-
-def warm_up_steps(iteration, options):
-    """Returns learning rate based on current iteration. Used to implement learning rate warm up
-    technique
-
-    Parameters
-    ----------
-    iteration : `int`
-        Number of iteration
-    options : `Namespace`
-        Training options
-
-    Returns
-    -------
-    learning_rate : float
-        Learning rate
-    """
-    if options.resume_training:
-        return options.lr
-
-    return min(options.lr, options.lr * (math.log(iteration) / math.log(options.lr_warmup_steps)))
 
 
 def get_gradients(model, ctx, options):
@@ -451,8 +410,7 @@ def execute_trainer_step(net, trainer, ctx, options):
     options: `SimpleNamespace`
         Training options
     """
-    scailing_coeff = len(ctx) * options.batch_size \
-        if options.grad_req_add_mode == 0 else options.grad_req_add_mode
+    scailing_coeff = len(ctx) * options.batch_size
 
     if options.clip or options.train_unk_token:
         trainer.allreduce_grads()
@@ -526,58 +484,6 @@ def save_trainer_parameters(trainer, epoch, options):
     trainer.save_states(save_path)
 
 
-def save_transformed_dataset(dataset, path):
-    """Save processed dataset into a file.
-
-    Parameters
-    ----------
-    dataset : `Dataset`
-        Dataset to save
-    path : `str`
-        Saving path
-    """
-    pickle.dump(dataset, open(path, 'wb'))
-
-
-def load_transformed_dataset(path):
-    """Loads already preprocessed dataset from disk
-
-    Parameters
-    ----------
-    path : `str`
-        Loading path
-
-    Returns
-    -------
-    processed_dataset : SimpleDataset
-        Transformed dataset
-    """
-    processed_dataset = pickle.load(open(path, 'rb'))
-    return processed_dataset
-
-
-def run_preprocess_mode(options):
-    """Run program in data preprocessing mode
-
-    Parameters
-    ----------
-    options : `Namespace`
-        Data preprocessing arguments
-    """
-    # we use both datasets to create proper vocab
-    dataset_train = SQuAD(segment='train')
-    dataset_dev = SQuAD(segment='dev')
-
-    vocab_provider = VocabProvider([dataset_train, dataset_dev], options)
-    transformed_dataset = transform_dataset(dataset_train, vocab_provider, options=options,
-                                            enable_filtering=True)
-    save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
-
-    if options.preprocessed_val_dataset_path:
-        transformed_dataset = transform_dataset(dataset_dev, vocab_provider, options=options)
-        save_transformed_dataset(transformed_dataset, options.preprocessed_val_dataset_path)
-
-
 def run_training_mode(options):
     """Run program in data training mode
 
@@ -586,27 +492,18 @@ def run_training_mode(options):
     options : `Namespace`
         Model training parameters
     """
-    dataset = SQuAD(segment='train')
-    dataset_val = SQuAD(segment='dev')
-    vocab_provider = VocabProvider([dataset, dataset_val], options)
+    pipeline = SQuADDataPipeline(options.ctx_max_len, options.q_max_len,
+                                 options.ctx_max_len, options.q_max_len,
+                                 options.answer_max_len, options.word_max_len,
+                                 options.embedding_size)
+    train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
+        pipeline.get_processed_data(BiDAFTokenizer())
 
-    if options.preprocessed_dataset_path and isfile(options.preprocessed_dataset_path):
-        transformed_dataset = load_transformed_dataset(options.preprocessed_dataset_path)
-    else:
-        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options,
-                                                enable_filtering=True)
-        save_transformed_dataset(transformed_dataset, options.preprocessed_dataset_path)
-
-    _, train_dataloader = get_record_per_answer_span(transformed_dataset, options)
-    word_vocab, char_vocab = get_vocabs(vocab_provider, options=options)
     ctx = get_context(options)
 
     net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
     net.initialize(init.Xavier(), ctx=ctx)
     net.hybridize(static_alloc=True)
-
-    if options.grad_req_add_mode:
-        net.collect_params().setattr('grad_req', 'add')
 
     if options.resume_training:
         print('Resuming training from {} epoch'.format(options.resume_training))
@@ -614,7 +511,16 @@ def run_training_mode(options):
                                    'epoch{:d}.params'.format(int(options.resume_training) - 1))
         net.load_parameters(params_path, ctx)
 
-    run_training(net, train_dataloader, ctx, options=options)
+    train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
+                                  batch_size=len(ctx) * options.batch_size, shuffle=True,
+                                  last_batch='rollover', num_workers=multiprocessing.cpu_count(),
+                                  pin_memory=True)
+    dev_dataloader = DataLoader(dev_dataset.transform(SQuADDataLoaderTransformer()),
+                                batch_size=len(ctx) * options.batch_size, shuffle=False,
+                                last_batch='keep', num_workers=multiprocessing.cpu_count(),
+                                pin_memory=True)
+
+    run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, options=options)
 
 
 def run_evaluate_mode(options, existing_net=None, existing_ema=None):
@@ -634,135 +540,37 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
     result : dict
         Dictionary with exact_match and F1 scores
     """
-    train_dataset = SQuAD(segment='train')
-    dataset = SQuAD(segment='dev')
-
-    vocab_provider = VocabProvider([train_dataset, dataset], options)
-    mapper = QuestionIdMapper(dataset)
-
-    if options.preprocessed_val_dataset_path and isfile(options.preprocessed_val_dataset_path):
-        transformed_dataset = load_transformed_dataset(options.preprocessed_val_dataset_path)
-    else:
-        transformed_dataset = transform_dataset(dataset, vocab_provider, options=options)
-        save_transformed_dataset(transformed_dataset, options.preprocessed_val_dataset_path)
-
-    word_vocab, char_vocab = get_vocabs(vocab_provider, options=options)
-    ctx = get_context(options)
-
-    evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
-                                     dataset._read_data(), mapper)
-
-    net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
-
-    if existing_ema is not None:
-        params_path = save_model_parameters(existing_ema.get_params(), options.epochs, options)
-
-    elif existing_net is not None:
-        params_path = save_model_parameters(existing_net.collect_params(), options.epochs, options)
-
-    else:
-        params_path = os.path.join(options.save_dir,
-                                   'epoch{:d}.params'.format(int(options.epochs) - 1))
-
-    net.collect_params().load(params_path, ctx=ctx)
-    net.hybridize(static_alloc=True)
-    return evaluator.evaluate_performance(net, ctx, options)
-
-
-def get_args():
-    """Get console arguments
-    """
-    parser = argparse.ArgumentParser(description='Question Answering example using BiDAF & SQuAD',
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--preprocess', default=False, action='store_true',
-                        help='Preprocess dataset')
-    parser.add_argument('--train', default=False, action='store_true',
-                        help='Run training')
-    parser.add_argument('--evaluate', default=False, action='store_true',
-                        help='Run evaluation on dev dataset')
-    parser.add_argument('--preprocessed_dataset_path', type=str,
-                        default='preprocessed_dataset.p', help='Path to preprocessed dataset')
-    parser.add_argument('--preprocessed_val_dataset_path', type=str,
-                        default='preprocessed_val_dataset.p',
-                        help='Path to preprocessed validation dataset')
-    parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
-    parser.add_argument('--embedding_size', type=int, default=100,
-                        help='Dimension of the word embedding')
-    parser.add_argument('--dropout', type=float, default=0.2,
-                        help='dropout applied to layers (0 = no dropout)')
-    parser.add_argument('--ctx_embedding_num_layers', type=int, default=2,
-                        help='Number of layers in Contextual embedding layer of BiDAF')
-    parser.add_argument('--highway_num_layers', type=int, default=2,
-                        help='Number of layers in Highway layer of BiDAF')
-    parser.add_argument('--modeling_num_layers', type=int, default=2,
-                        help='Number of layers in Modeling layer of BiDAF')
-    parser.add_argument('--output_num_layers', type=int, default=1,
-                        help='Number of layers in Output layer of BiDAF')
-    parser.add_argument('--batch_size', type=int, default=60, help='Batch size')
-    parser.add_argument('--ctx_max_len', type=int, default=400, help='Maximum length of a context')
-    parser.add_argument('--q_max_len', type=int, default=30, help='Maximum length of a question')
-    parser.add_argument('--word_max_len', type=int, default=16, help='Maximum characters in a word')
-    parser.add_argument('--answer_max_len', type=int, default=30, help='Maximum tokens in answer')
-    parser.add_argument('--optimizer', type=str, default='adadelta', help='optimization algorithm')
-    parser.add_argument('--lr', type=float, default=0.5, help='Initial learning rate')
-    parser.add_argument('--rho', type=float, default=0.9,
-                        help='Adadelta decay rate for both squared gradients and delta.')
-    parser.add_argument('--lr_warmup_steps', type=int, default=0,
-                        help='Defines how many iterations to spend on warming up learning rate')
-    parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
-    parser.add_argument('--weight_decay', type=float, default=0,
-                        help='Weight decay for parameter updates')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
-                        help='Report interval applied to last epoch only')
-    parser.add_argument('--early_stop', type=int, default=9,
-                        help='Apply early stopping for the last epoch. Stop after # of consequent '
-                             '# of times F1 is lower than max. Should be used with log_interval')
-    parser.add_argument('--resume_training', type=int, default=0,
-                        help='Resume training from this epoch number')
-    parser.add_argument('--terminate_training_on_reaching_F1_threshold', type=float, default=0,
-                        help='Some tasks, like DAWNBenchmark requires to minimize training time '
-                             'while reaching a particular F1 metric. This parameter controls if '
-                             'training should be terminated as soon as F1 is reached to minimize '
-                             'training time and cost. It would force to do evaluation every epoch.')
-    parser.add_argument('--save_dir', type=str, default='out_dir',
-                        help='directory path to save the final model and training log')
-    parser.add_argument('--word_vocab_path', type=str, default=None,
-                        help='Path to preprocessed word-level vocabulary')
-    parser.add_argument('--char_vocab_path', type=str, default=None,
-                        help='Path to preprocessed character-level vocabulary')
-    parser.add_argument('--gpu', type=str, default=None,
-                        help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
-    parser.add_argument('--train_unk_token', default=False, action='store_true',
-                        help='Should train unknown token of embedding')
-    parser.add_argument('--filter_long_context', default=True, action='store_false',
-                        help='Filter contexts if the answer is after ctx_max_len')
-    parser.add_argument('--save_prediction_path', type=str, default='',
-                        help='Path to save predictions')
-    parser.add_argument('--use_exponential_moving_average', default=True, action='store_false',
-                        help='Should averaged copy of parameters been stored and used '
-                             'during evaluation.')
-    parser.add_argument('--exponential_moving_average_weight_decay', type=float, default=0.999,
-                        help='Weight decay used in exponential moving average')
-    parser.add_argument('--grad_req_add_mode', type=int, default=0,
-                        help='Enable rolling gradient mode, where batch size is always 1 and '
-                             'gradients are accumulated using single GPU')
-
-    options = parser.parse_args()
-    return options
+    # pipeline = SQuADDataPipeline(options.ctx_max_len, options.q_max_len,
+    #                              options.ctx_max_len, options.q_max_len,
+    #                              options.answer_max_len, options.word_max_len,
+    #                              options.embedding_size)
+    # train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
+    #     pipeline.get_processed_data()
+    #
+    # evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
+    #                                  dataset._read_data(), mapper)
+    #
+    # net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
+    #
+    # if existing_ema is not None:
+    #     params_path = save_model_parameters(existing_ema.get_params(), options.epochs, options)
+    #
+    # elif existing_net is not None:
+    #     params_path = save_model_parameters(existing_net.collect_params(), options.epochs, options)
+    #
+    # else:
+    #     params_path = os.path.join(options.save_dir,
+    #                                'epoch{:d}.params'.format(int(options.epochs) - 1))
+    #
+    # net.collect_params().load(params_path, ctx=ctx)
+    # net.hybridize(static_alloc=True)
+    # return evaluator.evaluate_performance(net, ctx, options)
 
 
 if __name__ == '__main__':
     args = get_args()
     args.batch_size = int(args.batch_size / len(get_context(args)))
     print(args)
-
-    if args.preprocess:
-        if not args.preprocessed_dataset_path:
-            print('Preprocessed_data_path attribute is not provided')
-            exit(1)
-
-        print('Running in preprocessing mode')
-        run_preprocess_mode(args)
 
     if args.train:
         print('Running in training mode')

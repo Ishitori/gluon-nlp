@@ -34,7 +34,7 @@ class SQuADDataPipeline:
         self._word_vocab_file_name = 'word_vocab.bin'
         self._char_vocab_file_name = 'char_vocab.bin'
 
-    def get_processed_data(self):
+    def get_processed_data(self, base_tokenizer=None):
         if self._save_load_data and self._has_processed_data():
             return self._load_processed_data()
 
@@ -42,8 +42,10 @@ class SQuADDataPipeline:
         dev_dataset = SQuAD(segment='dev')
 
         with mp.Pool() as pool:
-            train_examples, dev_examples = self._tokenize_data(train_dataset, dev_dataset, pool)
-            word_vocab, char_vocab = self._get_vocabs(train_examples, dev_examples, pool)
+            train_examples, dev_examples = self._tokenize_data(train_dataset, dev_dataset,
+                                                               base_tokenizer, pool)
+            word_vocab, char_vocab = self._get_vocabs(train_examples, dev_examples, self._emb_size,
+                                                      pool)
 
         filter_provider = SQuADDataFilter(self._train_para_limit,
                                           self._train_ques_limit,
@@ -72,8 +74,8 @@ class SQuADDataPipeline:
                SQuADQADataset(train_examples), SQuADQADataset(dev_examples), \
                word_vocab, char_vocab
 
-    def _tokenize_data(self, train_dataset, dev_dataset, pool):
-        tokenizer = SQuADDataTokenizer()
+    def _tokenize_data(self, train_dataset, dev_dataset, base_tokenizer, pool):
+        tokenizer = SQuADDataTokenizer(base_tokenizer)
 
         tic = time.time()
         print("Train examples [{}] transformation started.".format(len(train_dataset)))
@@ -108,7 +110,7 @@ class SQuADDataPipeline:
                                                                   time.time() - tic))
         return train_ready, dev_ready
 
-    def _get_vocabs(self, train_examples, dev_examples, pool):
+    def _get_vocabs(self, train_examples, dev_examples, emb_size, pool):
         tic = time.time()
         print("Word counters receiving started.")
         mapper = MapReduce(SQuADDataPipeline._split_into_words, SQuADDataPipeline._count_tokens)
@@ -124,7 +126,7 @@ class SQuADDataPipeline:
         word_vocab = Vocab({item[0]: item[1] for item in word_counts},
                            bos_token=None, eos_token=None)
         word_vocab.set_embedding(nlp.embedding.create('glove',
-                                                      source='glove.6B.{}d'.format(300)))
+                                                      source='glove.6B.{}d'.format(emb_size)))
         char_vocab = Vocab({item[0]: item[1] for item in char_counts},
                            bos_token=None, eos_token=None)
 
@@ -208,25 +210,25 @@ class SQuADDataPipeline:
 
 
 class SQuADDataTokenizer:
-    nlp = spacy.blank('en')
+    tokenizer = spacy.blank('en')
 
-    def __init__(self):
-        pass
+    def __init__(self, base_tokenizer=None):
+        self._base_tokenizer = base_tokenizer if base_tokenizer is not None \
+            else SQuADDataTokenizer._word_tokenize
 
-    @staticmethod
-    def tokenize_one_example(example):
+    def tokenize_one_example(self, example):
         r"""
             Process one article.
         """
         index, q_id, question, context, answer_list, answer_start = example
 
         context = context.replace('\'\'', '\" ').replace(r'``', '\" ')
-        context_tokens = SQuADDataTokenizer._word_tokenize(context)
+        context_tokens = self._base_tokenizer(context)
         context_chars = [list(token) for token in context_tokens]
         spans = SQuADDataTokenizer._get_token_spans(context, context_tokens)
 
         ques = question.replace('\'\'', '\" ').replace('``', '\" ')
-        ques_tokens = SQuADDataTokenizer._word_tokenize(ques)
+        ques_tokens = self._base_tokenizer(ques)
         ques_chars = [list(token) for token in ques_tokens]
 
         y1s, y2s = [], []
@@ -253,7 +255,7 @@ class SQuADDataTokenizer:
         r"""
         Tokenize sentence.
         """
-        doc = SQuADDataTokenizer.nlp(sent)
+        doc = SQuADDataTokenizer.tokenizer(sent)
         return [token.text for token in doc]
 
     @staticmethod
