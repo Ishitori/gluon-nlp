@@ -130,22 +130,6 @@ class SQuADDataPipeline:
         char_vocab = Vocab({item[0]: item[1] for item in char_counts},
                            bos_token=None, eos_token=None)
 
-        # with open('./data/word_counter.txt', 'w') as f:
-        #     for key, value in word_counts:
-        #         f.write('{}: {}\n'.format(key, value))
-        #
-        # with open('./data/char_counter.txt', 'w') as f:
-        #     for key, value in char_counts:
-        #         f.write('{}: {}\n'.format(key, value))
-        #
-        # with open('./data/word_vocab.txt', 'w') as f:
-        #     for token in word_vocab.idx_to_token:
-        #         f.write('{}\n'.format(token))
-        #
-        # with open('./data/char_vocab.txt', 'w') as f:
-        #     for token in char_vocab.idx_to_token:
-        #         f.write('{}\n'.format(token))
-
         return word_vocab, char_vocab
 
     def _has_processed_data(self):
