@@ -17,8 +17,8 @@ except ImportError:
 
 try:
     from config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
-                        ANS_LIMIT, CHAR_COUNT, DIM_WORD_EMBED, EPOCHS, SAVE_MODEL_PREFIX_NAME,
-                        SAVE_TRAINER_PREFIX_NAME,
+                        ANS_LIMIT, CHAR_COUNT, DIM_WORD_EMBED, GLOVE_FILE_NAME, EPOCHS,
+                        SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
                         LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
                         WORD_EMB_FILE_NAME, NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
                         ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
@@ -27,9 +27,8 @@ try:
                         TARGET_MODEL_FILE_NAME, WARM_UP_STEPS)
 except ImportError:
     from .qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
-                               ANS_LIMIT, CHAR_LIMIT, DIM_WORD_EMBED, EPOCHS,
-                               SAVE_MODEL_PREFIX_NAME,
-                               SAVE_TRAINER_PREFIX_NAME,
+                               ANS_LIMIT, CHAR_LIMIT, DIM_WORD_EMBED, GLOVE_FILE_NAME, EPOCHS,
+                               SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
                                LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
                                WORD_EMB_FILE_NAME, NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
                                ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
@@ -184,7 +183,7 @@ def reset_embedding_grad(model):
     Reset the grad about word embedding layer.
     """
     for ctx in CTX:
-        model.word_emb[0].weight.grad(ctx=ctx)[2:] = 0
+        model.word_emb[0].weight.grad(ctx=ctx)[1:] = 0
 
 
 def main():
@@ -192,7 +191,7 @@ def main():
     Main function.
     """
     pipeline = SQuADDataPipeline(TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT,
-                                 DEV_QUES_LIMIT, ANS_LIMIT, CHAR_LIMIT, DIM_WORD_EMBED)
+                                 DEV_QUES_LIMIT, ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME)
     train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
         pipeline.get_processed_data(use_spacy=True, shrink_word_vocab=True)
 
