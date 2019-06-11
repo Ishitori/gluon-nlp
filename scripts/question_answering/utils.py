@@ -18,13 +18,10 @@
 # under the License.
 
 """Various utility methods for Question Answering"""
-import collections
-import itertools
 import math
-import multiprocessing as mp
 
 
-def warm_up_lr(base_lr, iteration, lr_warmup_steps, resume_training=False):
+def warm_up_lr(base_lr, iteration, lr_warmup_steps):
     """Returns learning rate based on current iteration. Used to implement learning rate warm up
     technique
 
@@ -42,40 +39,4 @@ def warm_up_lr(base_lr, iteration, lr_warmup_steps, resume_training=False):
     learning_rate : float
         Learning rate
     """
-    if resume_training:
-        return base_lr
-
     return min(base_lr, base_lr * (math.log(iteration) / math.log(lr_warmup_steps)))
-
-
-class MapReduce:
-    def __init__(self, map_func, reduce_func, num_workers=None):
-        self._map_func = map_func
-        self._reduce_func = reduce_func
-        self._num_workers = num_workers
-
-    def __call__(self, inputs, pool=None):
-        if pool:
-            map_responses = pool.map(self._map_func, inputs)
-        else:
-            with mp.Pool(self._num_workers) as p:
-                map_responses = p.map(self._map_func, inputs)
-
-        partitions = self._partition(
-            itertools.chain(*map_responses)
-        )
-
-        if pool:
-            reduced_values = pool.map(self._reduce_func, partitions)
-        else:
-            with mp.Pool(self._num_workers) as p:
-                reduced_values = p.map(self._reduce_func, partitions)
-
-        return reduced_values
-
-    @staticmethod
-    def _partition(mapped_values):
-        partitioned_data = collections.defaultdict(list)
-        for key, value in mapped_values:
-            partitioned_data[key].append(value)
-        return partitioned_data.items()
