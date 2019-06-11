@@ -27,137 +27,15 @@ from time import time
 import mxnet as mx
 from mxnet import gluon, init, autograd
 from mxnet.gluon import Trainer
-from mxnet.gluon.data import DataLoader, SimpleDataset, ArrayDataset
+from mxnet.gluon.data import DataLoader
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
 from scripts.question_answering.bidaf_config import get_args
-from scripts.question_answering.bidaf_tokenizer import BiDAFTokenizer
 from scripts.question_answering.data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
 from scripts.question_answering.utils import warm_up_lr
 
-from .data_processing import VocabProvider, SQuADTransform
 from .ema import ExponentialMovingAverage
 from .bidaf_model import BiDAFModel
-
-
-def transform_dataset(dataset, vocab_provider, options, enable_filtering=False):
-    """Get transformed dataset
-
-    Parameters
-    ----------
-    dataset : `Dataset`
-        Original dataset
-    vocab_provider : `VocabularyProvider`
-        Vocabulary provider
-    options : `Namespace`
-        Data transformation arguments
-    enable_filtering : `Bool`
-        Remove data that doesn't match BiDAF model requirements
-
-    Returns
-    -------
-    data : SimpleDataset
-        Transformed dataset
-    """
-    tokenizer = vocab_provider.get_tokenizer()
-    transformer = SQuADTransform(vocab_provider, options.q_max_len,
-                                 options.ctx_max_len, options.word_max_len, options.embedding_size)
-
-    i = 0
-    transformed_records = []
-    long_context = 0
-    long_question = 0
-
-    for i, record in enumerate(dataset):
-        if enable_filtering:
-            tokenized_question = tokenizer(record[2], lower_case=True)
-
-            if len(tokenized_question) > options.q_max_len:
-                long_question += 1
-                continue
-
-        transformed_record = transformer(*record)
-
-        # if answer end index is after ctx_max_len token we do not use this record
-        if enable_filtering and transformed_record[6][0][1] >= options.ctx_max_len:
-            continue
-
-        transformed_records.append(transformed_record)
-
-    processed_dataset = SimpleDataset(transformed_records)
-    print('{}/{} records left. Too long context {}, too long query {}'.format(
-        len(processed_dataset), i + 1, long_context, long_question))
-    return processed_dataset
-
-
-def get_record_per_answer_span(processed_dataset, options):
-    """Each record might have multiple answers and for training purposes it is better to increase
-    number of records by creating a record per each answer.
-
-    Parameters
-    ----------
-    processed_dataset : `Dataset`
-        Transformed dataset, ready to be trained on
-    options : `Namespace`
-        Command arguments
-
-    Returns
-    -------
-    data : Tuple
-        A tuple of dataset and dataloader. Each item in dataset is:
-        (index, question_word_index, context_word_index, question_char_index, context_char_index,
-        answers)
-    """
-    data_no_label = []
-    labels = []
-    global_index = 0
-
-    # copy records to a record per answer
-    for r in processed_dataset:
-        # creating a set out of answer_span will deduplicate them
-        for answer_span in set(r[6]):
-            # if after all preprocessing the answer is not in the context anymore,
-            # the item is filtered out
-            if options.filter_long_context and (answer_span[0] > r[3].size or
-                                                answer_span[1] > r[3].size):
-                continue
-            # need to remove question id before feeding the data to data loader
-            # And I also replace index with global_index when unrolling answers
-            data_no_label.append((global_index, r[2], r[3], r[4], r[5]))
-            labels.append(mx.nd.array(answer_span))
-            global_index += 1
-
-    loadable_data = ArrayDataset(data_no_label, labels)
-    dataloader = DataLoader(loadable_data,
-                            batch_size=options.batch_size * len(get_context(options)),
-                            shuffle=True,
-                            last_batch='rollover',
-                            pin_memory=True,
-                            num_workers=(multiprocessing.cpu_count() -
-                                         len(get_context(options)) - 2))
-
-    print('Total records for training: {}'.format(len(labels)))
-    return loadable_data, dataloader
-
-
-def get_vocabs(vocab_provider, options):
-    """Get word-level and character-level vocabularies
-
-    Parameters
-    ----------
-    vocab_provider : `VocabProvider`
-        VocabProvider
-    options : `Namespace`
-        Vocab building arguments
-
-    Returns
-    -------
-    data : Tuple
-        A tuple of word vocabulary and character vocabulary
-    """
-    word_vocab = vocab_provider.get_word_level_vocab(options.embedding_size)
-    char_vocab = vocab_provider.get_char_level_vocab()
-    return word_vocab, char_vocab
 
 
 def get_context(options):
@@ -234,7 +112,8 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
         records_per_epoch_count = 0
         e_start = time()
 
-        for i, (r_idx, ctx_words, q_words, ctx_chars, q_chars, start, end) in enumerate(train_dataloader):
+        for i, (r_idx, ctx_words, q_words, ctx_chars, q_chars, start, end) in enumerate(
+                train_dataloader):
             records_per_epoch_count += r_idx.shape[0]
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
             ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
@@ -497,7 +376,7 @@ def run_training_mode(options):
                                  options.answer_max_len, options.word_max_len,
                                  options.embedding_size)
     train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
-        pipeline.get_processed_data(BiDAFTokenizer())
+        pipeline.get_processed_data(use_spacy=False)
 
     ctx = get_context(options)
 

@@ -31,7 +31,7 @@ DEV_EM = './logs/dev_em.json'
 EVALUATE_INTERVAL = 5000
 
 TRAIN_FLAG = True
-CTX = [mx.gpu(1)]
+CTX = [mx.gpu(0)]
 
 EPOCHS = 60
 TRAIN_BATCH_SIZE = 32

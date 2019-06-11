@@ -110,8 +110,8 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
             dev_f1.append([global_step, f1_score])
             dev_em.append([global_step, em_score])
 
-        c_mask = context > padding_token_idx
-        q_mask = query > padding_token_idx
+        c_mask = context != padding_token_idx
+        q_mask = query != padding_token_idx
         batch_sizes = context.shape[0]
 
         context = gluon.utils.split_and_load(data=context, ctx_list=CTX)
@@ -194,7 +194,7 @@ def main():
     pipeline = SQuADDataPipeline(TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT,
                                  DEV_QUES_LIMIT, ANS_LIMIT, CHAR_LIMIT, DIM_WORD_EMBED)
     train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
-        pipeline.get_processed_data()
+        pipeline.get_processed_data(use_spacy=True, shrink_word_vocab=True)
 
     model = QANet(len(word_vocab), len(char_vocab))
     # initial parameters
