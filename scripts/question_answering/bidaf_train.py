@@ -31,6 +31,7 @@ from mxnet.gluon.data import DataLoader
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
 from scripts.question_answering.bidaf_config import get_args
+from scripts.question_answering.bidaf_evaluate import PerformanceEvaluator
 from scripts.question_answering.data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
 from scripts.question_answering.utils import warm_up_lr
 
@@ -86,12 +87,6 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
         hyperparameters['rho'] = options.rho
 
     trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters, kvstore='device')
-
-    if options.resume_training:
-        path = os.path.join(options.save_dir,
-                            'trainer_epoch{:d}.params'.format(options.resume_training - 1))
-        trainer.load_states(path)
-
     loss_function = SoftmaxCrossEntropyLoss()
     ema = None
 
@@ -105,8 +100,7 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
     print('Starting training...')
 
-    for e in range(0 if not options.resume_training else options.resume_training,
-                   options.epochs):
+    for e in range(options.epochs):
         i = 0
         avg_loss *= 0  # Zero average loss of each epoch
         records_per_epoch_count = 0
@@ -114,6 +108,7 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
         for i, (r_idx, ctx_words, q_words, ctx_chars, q_chars, start, end) in enumerate(
                 train_dataloader):
+
             records_per_epoch_count += r_idx.shape[0]
             q_words = gluon.utils.split_and_load(q_words, ctx, even_split=False)
             ctx_words = gluon.utils.split_and_load(ctx_words, ctx, even_split=False)
@@ -139,14 +134,9 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
                 for name, param in net.collect_params().items():
                     ema.add(name, param.data(ctx[0]))
 
-                if options.resume_training:
-                    path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(
-                        options.resume_training - 1))
-                    ema.get_params().load(path)
-
             if options.lr_warmup_steps:
-                trainer.set_learning_rate(warm_up_lr(options.lr, iteration, options.lr_warmup_steps,
-                                                     options.resume_training))
+                trainer.set_learning_rate(
+                    warm_up_lr(options.lr, iteration, options.lr_warmup_steps))
 
             execute_trainer_step(net, trainer, ctx, options)
 
@@ -157,7 +147,8 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
             if options.log_interval > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
                 evaluate_options.epochs = iteration
-                eval_result = run_evaluate_mode(evaluate_options, net, ema)
+                eval_result = run_evaluate(net, dev_dataloader, dev_dataset, dev_json,
+                                           evaluate_options, ema)
 
                 print('Iteration {} evaluation results on dev dataset: {}'.format(iteration,
                                                                                   eval_result))
@@ -204,7 +195,8 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
         if options.terminate_training_on_reaching_F1_threshold:
             evaluate_options = copy.deepcopy(options)
             evaluate_options.epochs = e
-            eval_result = run_evaluate_mode(evaluate_options, net, ema)
+            eval_result = run_evaluate(net, dev_dataloader, dev_dataset, dev_json, evaluate_options,
+                                       ema)
 
             if eval_result['f1'] >= options.terminate_training_on_reaching_F1_threshold:
                 print('Finishing training on {} epoch, because dev F1 score is >= required {}. {}'
@@ -363,53 +355,14 @@ def save_trainer_parameters(trainer, epoch, options):
     trainer.save_states(save_path)
 
 
-def run_training_mode(options):
-    """Run program in data training mode
-
-    Parameters
-    ----------
-    options : `Namespace`
-        Model training parameters
-    """
-    pipeline = SQuADDataPipeline(options.ctx_max_len, options.q_max_len,
-                                 options.ctx_max_len, options.q_max_len,
-                                 options.answer_max_len, options.word_max_len,
-                                 options.embedding_size)
-    train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
-        pipeline.get_processed_data(use_spacy=False)
-
-    ctx = get_context(options)
-
-    net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
-    net.initialize(init.Xavier(), ctx=ctx)
-    net.hybridize(static_alloc=True)
-
-    if options.resume_training:
-        print('Resuming training from {} epoch'.format(options.resume_training))
-        params_path = os.path.join(options.save_dir,
-                                   'epoch{:d}.params'.format(int(options.resume_training) - 1))
-        net.load_parameters(params_path, ctx)
-
-    train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
-                                  batch_size=len(ctx) * options.batch_size, shuffle=True,
-                                  last_batch='rollover', num_workers=multiprocessing.cpu_count(),
-                                  pin_memory=True)
-    dev_dataloader = DataLoader(dev_dataset.transform(SQuADDataLoaderTransformer()),
-                                batch_size=len(ctx) * options.batch_size, shuffle=False,
-                                last_batch='keep', num_workers=multiprocessing.cpu_count(),
-                                pin_memory=True)
-
-    run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, options=options)
-
-
-def run_evaluate_mode(options, existing_net=None, existing_ema=None):
+def run_evaluate(net, dev_dataloader, dev_dataset, dev_json, options, existing_ema=None):
     """Run program in evaluating mode
 
     Parameters
     ----------
-    existing_net : `Block`
+    net : `Block`
         Trained existing network
-    existing_ema : `PolyakAveraging`
+    existing_ema : `ExponentialMovingAverage`
         Averaged parameters of the network
     options : `Namespace`
         Model evaluation arguments
@@ -419,31 +372,20 @@ def run_evaluate_mode(options, existing_net=None, existing_ema=None):
     result : dict
         Dictionary with exact_match and F1 scores
     """
-    # pipeline = SQuADDataPipeline(options.ctx_max_len, options.q_max_len,
-    #                              options.ctx_max_len, options.q_max_len,
-    #                              options.answer_max_len, options.word_max_len,
-    #                              options.embedding_size)
-    # train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
-    #     pipeline.get_processed_data()
-    #
-    # evaluator = PerformanceEvaluator(BiDAFTokenizer(), transformed_dataset,
-    #                                  dataset._read_data(), mapper)
-    #
-    # net = BiDAFModel(word_vocab, char_vocab, options, prefix='bidaf')
-    #
-    # if existing_ema is not None:
-    #     params_path = save_model_parameters(existing_ema.get_params(), options.epochs, options)
-    #
-    # elif existing_net is not None:
-    #     params_path = save_model_parameters(existing_net.collect_params(), options.epochs, options)
-    #
-    # else:
-    #     params_path = os.path.join(options.save_dir,
-    #                                'epoch{:d}.params'.format(int(options.epochs) - 1))
-    #
-    # net.collect_params().load(params_path, ctx=ctx)
-    # net.hybridize(static_alloc=True)
-    # return evaluator.evaluate_performance(net, ctx, options)
+
+    if existing_ema is not None:
+        params_path = save_model_parameters(net.collect_params(), options.epochs, options)
+
+        for name, params in net.collect_params().items():
+            params.set_data(existing_ema.get(name))
+
+    evaluator = PerformanceEvaluator(dev_dataloader, dev_dataset, dev_json)
+    performance = evaluator.evaluate_performance(net, ctx, options)
+
+    if existing_ema is not None:
+        net.collect_params().load(params_path, ctx=ctx)
+
+    return performance
 
 
 if __name__ == '__main__':
@@ -451,11 +393,34 @@ if __name__ == '__main__':
     args.batch_size = int(args.batch_size / len(get_context(args)))
     print(args)
 
+    pipeline = SQuADDataPipeline(args.ctx_max_len, args.q_max_len,
+                                 args.ctx_max_len, args.q_max_len,
+                                 args.answer_max_len, args.word_max_len,
+                                 args.embedding_file_name)
+    train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
+        pipeline.get_processed_data(use_spacy=False, shrink_word_vocab=True)
+
+    ctx = get_context(args)
+
+    net = BiDAFModel(word_vocab, char_vocab, args, prefix='bidaf')
+    net.initialize(init.Xavier(), ctx=ctx)
+    net.hybridize(static_alloc=True)
+
+    train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
+                                  batch_size=len(ctx) * args.batch_size, shuffle=True,
+                                  last_batch='rollover', num_workers=multiprocessing.cpu_count(),
+                                  pin_memory=True)
+    dev_dataloader = DataLoader(dev_dataset.transform(SQuADDataLoaderTransformer()),
+                                batch_size=len(ctx) * args.batch_size, shuffle=False,
+                                last_batch='keep', num_workers=multiprocessing.cpu_count(),
+                                pin_memory=True)
+
     if args.train:
         print('Running in training mode')
-        run_training_mode(args)
+        run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx,
+                     options=args)
 
     if args.evaluate:
         print('Running in evaluation mode')
-        result = run_evaluate_mode(args)
+        result = run_evaluate(net, dev_dataloader, dev_dataset, dev_json, args)
         print('Evaluation results on dev dataset: {}'.format(result))

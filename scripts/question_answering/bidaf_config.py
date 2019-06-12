@@ -34,6 +34,8 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=12, help='Upper epoch limit')
     parser.add_argument('--embedding_size', type=int, default=100,
                         help='Dimension of the word embedding')
+    parser.add_argument('--embedding_file_name', type=str, default='glove.6B.100d',
+                        help='Embedding file name')
     parser.add_argument('--dropout', type=float, default=0.2,
                         help='dropout applied to layers (0 = no dropout)')
     parser.add_argument('--ctx_embedding_num_layers', type=int, default=2,
@@ -63,8 +65,6 @@ def get_args():
     parser.add_argument('--early_stop', type=int, default=9,
                         help='Apply early stopping for the last epoch. Stop after # of consequent '
                              '# of times F1 is lower than max. Should be used with log_interval')
-    parser.add_argument('--resume_training', type=int, default=0,
-                        help='Resume training from this epoch number')
     parser.add_argument('--terminate_training_on_reaching_F1_threshold', type=float, default=0,
                         help='Some tasks, like DAWNBenchmark requires to minimize training time '
                              'while reaching a particular F1 metric. This parameter controls if '

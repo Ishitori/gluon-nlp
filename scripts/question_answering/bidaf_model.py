@@ -20,14 +20,13 @@
 """Bidirectional attention flow model with all subblocks"""
 import numpy as np
 from mxnet import gluon
-
-from .similarity_function import DotProductSimilarity, LinearSimilarity
 from mxnet import initializer
 from mxnet.gluon import HybridBlock
 from mxnet.gluon import nn
 from mxnet.gluon.rnn import LSTM
 
 from gluonnlp.model import ConvolutionalEncoder, Highway
+from .similarity_function import DotProductSimilarity, LinearSimilarity
 
 
 class AttentionFlow(gluon.HybridBlock):
@@ -54,6 +53,7 @@ class AttentionFlow(gluon.HybridBlock):
     similarity_function: ``SimilarityFunction``, optional (default=``DotProductSimilarity``)
         The similarity function to use when computing the attention.
     """
+
     def __init__(self, similarity_function, passage_length,
                  question_length, **kwargs):
         super(AttentionFlow, self).__init__(**kwargs)
@@ -122,7 +122,6 @@ class BidirectionalAttentionFlow(gluon.HybridBlock):
         # Shape: (batch_size, passage_length, encoding_dim)
         passage_question_vectors = F.batch_dot(passage_question_attention, encoded_question)
 
-
         # We replace masked values with something really negative here, so they don't affect the
         # max below.
         masked_similarity = passage_question_similarity if question_mask is None else \
@@ -162,6 +161,7 @@ class BiDAFEmbedding(HybridBlock):
     1. Matrix of words: batch_size x words_per_question/context
     2. Tensor of characters: batch_size x words_per_question/context x chars_per_word
     """
+
     def __init__(self, word_vocab, char_vocab, max_seq_len,
                  contextual_embedding_nlayers=2, highway_nlayers=2, embedding_size=100,
                  dropout=0.2, prefix=None, params=None):
@@ -217,6 +217,7 @@ class BiDAFEmbedding(HybridBlock):
 
         def convolute(token_of_all_batches, _):
             return self._char_conv_embedding(token_of_all_batches), []
+
         char_embedded, _ = F.contrib.foreach(convolute, char_level_data, [])
 
         # Transpose to TNC, to join with character embedding
@@ -264,6 +265,7 @@ class BiDAFOutputLayer(HybridBlock):
     params : `ParameterDict` or `None`
         Shared Parameters for this `Block`.
     """
+
     def __init__(self, span_start_input_dim=100, nlayers=1, biflag=True,
                  dropout=0.2, prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
@@ -320,6 +322,7 @@ class BiDAFModel(HybridBlock):
         url       = {https://arxiv.org/abs/1611.01603}
     }
     """
+
     def __init__(self, word_vocab, char_vocab, options, prefix=None, params=None):
         super(BiDAFModel, self).__init__(prefix=prefix, params=params)
         self._options = options
@@ -371,8 +374,8 @@ class BiDAFModel(HybridBlock):
         q_embedding_output = F.transpose(q_embedding_output, axes=(1, 0, 2))
 
         # Both masks can be None
-        q_mask = qw > self._padding_token_idx
-        ctx_mask = cw > self._padding_token_idx
+        q_mask = qw != self._padding_token_idx
+        ctx_mask = cw != self._padding_token_idx
 
         passage_question_similarity = self.matrix_attention(ctx_embedding_output,
                                                             q_embedding_output)

@@ -7,11 +7,9 @@ from mxnet import autograd, nd
 from tqdm import tqdm
 
 try:
-    from qanet_config import (CTX, DATA_PATH, EVAL_BATCH_SIZE, MAX_ANSWER_LENS,
-                              RAW_DEV_FILE, RAW_TRAIN_FILE)
+    from qanet_config import (CTX, MAX_ANSWER_LENS)
 except ImportError:
-    from .qanet_config import (CTX, DATA_PATH, EVAL_BATCH_SIZE, MAX_ANSWER_LENS,
-                               RAW_DEV_FILE, RAW_TRAIN_FILE)
+    from .qanet_config import (CTX, MAX_ANSWER_LENS)
 
 try:
     from official_squad_eval_script import evaluate as official_eval
@@ -37,7 +35,7 @@ def evaluate(model, dataloader, dataset, original_json_data, ema=None, padding_t
     ----------
     dataset_type : string, default 'train'
         which dataset to evaluate.
-    ema : object or None, default None
+    ema : `ExponentialMovingAverage`
         Whether use the shadow variable to evaluate.
     """
     model.save_parameters('tmp')
@@ -49,14 +47,14 @@ def evaluate(model, dataloader, dataset, original_json_data, ema=None, padding_t
     autograd.set_training(False)
     total_answers = {}
 
-    for idxs, context, query, context_char, query_char, begin, end in tqdm(dataloader):
+    for idxs, context, query, context_char, query_char, _, _ in tqdm(dataloader):
         context = context.as_in_context(ctx)
         query = query.as_in_context(ctx)
         context_char = context_char.as_in_context(ctx)
         query_char = query_char.as_in_context(ctx)
 
-        context_mask = context > padding_token_idx
-        query_mask = query > padding_token_idx
+        context_mask = context != padding_token_idx
+        query_mask = query != padding_token_idx
 
         raw_context = [dataset.get_record_by_idx(x.asscalar())[8] for x in idxs]
         spans = [dataset.get_record_by_idx(x.asscalar())[9] for x in idxs]

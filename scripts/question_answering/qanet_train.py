@@ -3,6 +3,7 @@ This file contains the train code.
 """
 import json
 import multiprocessing
+import os
 import time
 
 import mxnet as mx
@@ -17,24 +18,24 @@ except ImportError:
 
 try:
     from config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
-                        ANS_LIMIT, CHAR_COUNT, DIM_WORD_EMBED, GLOVE_FILE_NAME, EPOCHS,
+                        ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
                         SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
                         LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
-                        WORD_EMB_FILE_NAME, NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
+                        NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
                         ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
                         CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
                         INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
                         TARGET_MODEL_FILE_NAME, WARM_UP_STEPS)
 except ImportError:
     from .qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
-                               ANS_LIMIT, CHAR_LIMIT, DIM_WORD_EMBED, GLOVE_FILE_NAME, EPOCHS,
+                               ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
                                SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
                                LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
-                               WORD_EMB_FILE_NAME, NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
+                               NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
                                ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
                                CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
                                INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
-                               TARGET_MODEL_FILE_NAME, WARM_UP_STEPS)
+                               TARGET_MODEL_FILE_NAME, WARM_UP_STEPS, get_args)
 try:
     from qanet_model import MySoftmaxCrossEntropy, QANet
 except ImportError:
@@ -64,7 +65,7 @@ global_step = LAST_GLOBAL_STEP
 
 
 def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
-          loss_function, ema=None, total_batches=0, padding_token_idx=1):
+          loss_function, ema=None, total_batches=0, padding_token_idx=1, options=None):
     r"""
     Train and save.
     """
@@ -74,17 +75,19 @@ def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, t
                         trainer, loss_function, ema, total_batches, padding_token_idx)
 
         # save model after train one epoch
-        model.save_parameters(SAVE_MODEL_PREFIX_NAME +
-                              time.asctime(time.localtime(time.time())))
-        trainer.save_states(SAVE_TRAINER_PREFIX_NAME +
-                            time.asctime(time.localtime(time.time())))
+        model.save_parameters(os.path.join(options.save_dir, SAVE_MODEL_PREFIX_NAME +
+                                           time.asctime(time.localtime(time.time()))))
+        trainer.save_states(os.path.join(options.save_dir, SAVE_TRAINER_PREFIX_NAME +
+                                         time.asctime(time.localtime(time.time()))))
 
-        with open(ACCUM_AVG_TRAIN_CROSS_ENTROPY +
-                  time.asctime(time.localtime(time.time())), 'w') as f:
+        with open(os.path.join(options.save_dir,
+                               ACCUM_AVG_TRAIN_CROSS_ENTROPY + time.asctime(
+                                   time.localtime(time.time())), 'w')) as f:
             f.write(json.dumps(accum_avg_train_ce))
 
-        with open(BATCH_TRAIN_CROSS_ENTROPY +
-                  time.asctime(time.localtime(time.time())), 'w') as f:
+        with open(os.path.join(options.save_dir,
+                               BATCH_TRAIN_CROSS_ENTROPY + time.asctime(
+                                   time.localtime(time.time())), 'w')) as f:
             f.write(json.dumps(batch_train_ce))
 
 
@@ -190,9 +193,10 @@ def main():
     r"""
     Main function.
     """
+    args = get_args()
     pipeline = SQuADDataPipeline(TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT,
                                  DEV_QUES_LIMIT, ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME)
-    train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
+    _, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
         pipeline.get_processed_data(use_spacy=True, shrink_word_vocab=True)
 
     model = QANet(len(word_vocab), len(char_vocab))
@@ -235,7 +239,8 @@ def main():
         print('Train...')
         train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json, trainer,
               loss_function, ema, total_batches=len(train_dataset) // TRAIN_BATCH_SIZE,
-              padding_token_idx=word_vocab[word_vocab.padding_token])
+              padding_token_idx=word_vocab[word_vocab.padding_token],
+              options=args)
     else:
         print('Evaluating dev set...')
         dev_dataloader = DataLoader(dev_dataset.transform(SQuADDataLoaderTransformer()),

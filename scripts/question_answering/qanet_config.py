@@ -1,6 +1,26 @@
+# coding: utf-8
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 r"""
 This file contains all hyperparameters.
 """
+import argparse
 import mxnet as mx
 
 # Data preprocessing parameters
@@ -11,22 +31,15 @@ DEV_QUES_LIMIT = 100
 ANS_LIMIT = 30
 CHAR_LIMIT = 16
 
-DATA_PATH = './data/'
-RAW_TRAIN_FILE = 'train-v1.1.json'
-RAW_DEV_FILE = 'dev-v1.1.json'
 GLOVE_FILE_NAME = 'glove.840B.300d'
-TRAIN_FILE_NAME = 'train_sorted.json'
-DEV_FILE_NAME = 'dev_sorted.json'
-WORD_EMB_FILE_NAME = 'word_emb.json'
-CHAR_EMB_FILE_NAME = 'char_emb.json'
 
-ACCUM_AVG_TRAIN_CROSS_ENTROPY = './logs/accum_avg_train_cross_entropy.json'
-BATCH_TRAIN_CROSS_ENTROPY = './logs/batch_train_cross_entropy.json'
-TRAIN_F1 = './logs/train_f1.json'
-TRAIN_EM = './logs/train_em.json'
-DEV_CROSS_ENTROPY = './logs/dev_cross_entropy.json'
-DEV_F1 = './logs/dev_f1.json'
-DEV_EM = './logs/dev_em.json'
+ACCUM_AVG_TRAIN_CROSS_ENTROPY = 'qanet_accum_avg_train_cross_entropy.json'
+BATCH_TRAIN_CROSS_ENTROPY = 'qanet_batch_train_cross_entropy.json'
+TRAIN_F1 = 'qanet_train_f1.json'
+TRAIN_EM = 'qanet_train_em.json'
+DEV_CROSS_ENTROPY = 'qanet_dev_cross_entropy.json'
+DEV_F1 = 'qanet_dev_f1.json'
+DEV_EM = 'qanet_dev_em.json'
 
 EVALUATE_INTERVAL = 5000
 
@@ -95,3 +108,15 @@ WARM_UP_STEPS = 1000
 
 # evaluate
 MAX_ANSWER_LENS = 30
+
+
+def get_args():
+    """Get console arguments
+    """
+    parser = argparse.ArgumentParser(description='Question Answering example using QANet & SQuAD',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--save_dir', type=str, default='out_dir',
+                        help='directory path to save the final model and training log')
+
+    options = parser.parse_args()
+    return options

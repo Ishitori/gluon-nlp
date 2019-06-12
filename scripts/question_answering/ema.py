@@ -20,11 +20,7 @@
 """Exponential moving average"""
 
 
-import mxnet as mx
-from mxnet import gluon
-
-
-class ExponentialMovingAverage():
+class ExponentialMovingAverage(object):
     r"""An implement of Exponential Moving Average.
 
         shadow variable = decay * shadow variable + (1 - decay) * variable
