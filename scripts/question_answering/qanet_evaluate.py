@@ -8,13 +8,11 @@ from tqdm import tqdm
 
 try:
     from qanet_config import (CTX, MAX_ANSWER_LENS)
-except ImportError:
-    from .qanet_config import (CTX, MAX_ANSWER_LENS)
-
-try:
     from official_squad_eval_script import evaluate as official_eval
 except ImportError:
+    from .qanet_config import (CTX, MAX_ANSWER_LENS)
     from .official_squad_eval_script import evaluate as official_eval
+
 
 ctx = CTX[0]
 ANSWER_MASK_MATRIX = nd.zeros(

@@ -30,13 +30,20 @@ from mxnet.gluon import Trainer
 from mxnet.gluon.data import DataLoader
 from mxnet.gluon.loss import SoftmaxCrossEntropyLoss
 
-from scripts.question_answering.bidaf_config import get_args
-from scripts.question_answering.bidaf_evaluate import PerformanceEvaluator
-from scripts.question_answering.data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
-from scripts.question_answering.utils import warm_up_lr
-
-from .ema import ExponentialMovingAverage
-from .bidaf_model import BiDAFModel
+try:
+    from bidaf_config import get_args
+    from bidaf_evaluate import PerformanceEvaluator
+    from data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
+    from utils import warm_up_lr
+    from ema import ExponentialMovingAverage
+    from bidaf_model import BiDAFModel
+except ImportError:
+    from .bidaf_config import get_args
+    from .bidaf_evaluate import PerformanceEvaluator
+    from .data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
+    from .utils import warm_up_lr
+    from .ema import ExponentialMovingAverage
+    from .bidaf_model import BiDAFModel
 
 
 def get_context(options):

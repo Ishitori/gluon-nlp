@@ -21,7 +21,10 @@
 from mxnet import nd, gluon, cpu
 from tqdm import tqdm
 
-from .official_squad_eval_script import evaluate
+try:
+    from official_squad_eval_script import evaluate
+except ImportError:
+    from .official_squad_eval_script import evaluate
 
 
 class PerformanceEvaluator:

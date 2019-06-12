@@ -26,7 +26,11 @@ from mxnet.gluon import nn
 from mxnet.gluon.rnn import LSTM
 
 from gluonnlp.model import ConvolutionalEncoder, Highway
-from .similarity_function import DotProductSimilarity, LinearSimilarity
+
+try:
+    from similarity_function import DotProductSimilarity, LinearSimilarity
+except ImportError:
+    from .similarity_function import DotProductSimilarity, LinearSimilarity
 
 
 class AttentionFlow(gluon.HybridBlock):

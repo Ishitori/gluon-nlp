@@ -13,20 +13,21 @@ from tqdm import tqdm
 
 try:
     from data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
+    from qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
+                              ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
+                              SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
+                              LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
+                              NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
+                              ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
+                              CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
+                              INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
+                              TARGET_MODEL_FILE_NAME, WARM_UP_STEPS, get_args)
+    from qanet_model import MySoftmaxCrossEntropy, QANet
+    from qanet_evaluate import evaluate
+    from ema import ExponentialMovingAverage
+    from utils import warm_up_lr
 except ImportError:
     from .data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
-
-try:
-    from config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
-                        ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
-                        SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
-                        LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
-                        NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
-                        ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
-                        CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
-                        INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
-                        TARGET_MODEL_FILE_NAME, WARM_UP_STEPS)
-except ImportError:
     from .qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
                                ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
                                SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
@@ -36,27 +37,11 @@ except ImportError:
                                CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
                                INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
                                TARGET_MODEL_FILE_NAME, WARM_UP_STEPS, get_args)
-try:
-    from qanet_model import MySoftmaxCrossEntropy, QANet
-except ImportError:
     from .qanet_model import MySoftmaxCrossEntropy, QANet
-
-try:
-    from qanet_evaluate import evaluate
-except ImportError:
     from .qanet_evaluate import evaluate
-
-try:
-    from ema import ExponentialMovingAverage
-except ImportError:
     from .ema import ExponentialMovingAverage
-
-try:
-    from utils import warm_up_lr
-except ImportError:
     from .utils import warm_up_lr
 
-mx.random.seed(37)
 accum_avg_train_ce = []
 batch_train_ce = []
 dev_f1 = []
