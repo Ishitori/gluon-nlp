@@ -82,12 +82,12 @@ def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, t
 
         with open(os.path.join(options.save_dir,
                                ACCUM_AVG_TRAIN_CROSS_ENTROPY + time.asctime(
-                                   time.localtime(time.time())), 'w')) as f:
+                                   time.localtime(time.time()))), 'w') as f:
             f.write(json.dumps(accum_avg_train_ce))
 
         with open(os.path.join(options.save_dir,
                                BATCH_TRAIN_CROSS_ENTROPY + time.asctime(
-                                   time.localtime(time.time())), 'w')) as f:
+                                   time.localtime(time.time()))), 'w') as f:
             f.write(json.dumps(batch_train_ce))
 
 
