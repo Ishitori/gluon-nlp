@@ -115,7 +115,7 @@ def get_args():
     """
     parser = argparse.ArgumentParser(description='Question Answering example using QANet & SQuAD',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--save_dir', type=str, default='out_dir',
+    parser.add_argument('--save_dir', type=str, default='qanet_output',
                         help='directory path to save the final model and training log')
 
     options = parser.parse_args()

@@ -70,13 +70,13 @@ def get_args():
                              'while reaching a particular F1 metric. This parameter controls if '
                              'training should be terminated as soon as F1 is reached to minimize '
                              'training time and cost. It would force to do evaluation every epoch.')
-    parser.add_argument('--save_dir', type=str, default='out_dir',
+    parser.add_argument('--save_dir', type=str, default='bidaf_output',
                         help='directory path to save the final model and training log')
     parser.add_argument('--word_vocab_path', type=str, default=None,
                         help='Path to preprocessed word-level vocabulary')
     parser.add_argument('--char_vocab_path', type=str, default=None,
                         help='Path to preprocessed character-level vocabulary')
-    parser.add_argument('--gpu', type=str, default=None,
+    parser.add_argument('--gpu', type=str, default='0',
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--train_unk_token', default=False, action='store_true',
                         help='Should train unknown token of embedding')

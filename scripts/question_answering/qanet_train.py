@@ -6,7 +6,6 @@ import multiprocessing
 import os
 import time
 
-import mxnet as mx
 from mxnet import autograd, gluon, nd
 from mxnet.gluon.data import DataLoader
 from tqdm import tqdm
@@ -25,7 +24,7 @@ try:
     from qanet_model import MySoftmaxCrossEntropy, QANet
     from qanet_evaluate import evaluate
     from ema import ExponentialMovingAverage
-    from utils import warm_up_lr
+    from utils import warm_up_lr, create_output_dir
 except ImportError:
     from .data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
     from .qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
@@ -40,7 +39,7 @@ except ImportError:
     from .qanet_model import MySoftmaxCrossEntropy, QANet
     from .qanet_evaluate import evaluate
     from .ema import ExponentialMovingAverage
-    from .utils import warm_up_lr
+    from .utils import warm_up_lr, create_output_dir
 
 accum_avg_train_ce = []
 batch_train_ce = []
@@ -51,8 +50,32 @@ global_step = LAST_GLOBAL_STEP
 
 def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
           loss_function, ema=None, total_batches=0, padding_token_idx=1, options=None):
-    r"""
-    Train and save.
+    """Start QANet training
+
+    Parameters
+    ----------
+    model : `Block`
+        Model to train
+    train_dataloader : `DataLoader`
+        Training data dataloader
+    dev_dataloader : `DataLoader`
+        Dev data dataloader
+    dev_dataset : `SQuADQADataset`
+        Dev data dataset
+    dev_json_data : `dict`
+        Original dev data JSON dict
+    trainer : `Trainer`
+        Trainer
+    loss_function : `Loss`
+        Loss function to use during training
+    ema : `ExponentialMovingAverage`
+        Exponential Moving Average to be used during evaluation
+    total_batches : int
+        Expected total batches in training dataloader. Used for displaying progress only
+    padding_token_idx : int
+        Index of the padding token
+    options : `Namespace`
+        Command arguments
     """
     for e in tqdm(range(EPOCHS)):
         print('Begin %d/%d epoch...' % (e + 1, EPOCHS))
@@ -78,8 +101,30 @@ def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, t
 
 def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
                     loss_function, ema=None, total_batches=0, padding_token_idx=1):
-    r"""
-    One train loop.
+    """Execute one epoch of a training
+
+    Parameters
+    ----------
+    model : `Block`
+        Model to train
+    train_dataloader : `DataLoader`
+        Training data dataloader
+    dev_dataloader : `DataLoader`
+        Dev data dataloader
+    dev_dataset : `SQuADQADataset`
+        Dev data dataset
+    dev_json_data : `dict`
+        Original dev data JSON dict
+    trainer : `Trainer`
+        Trainer
+    loss_function : `Loss`
+        Loss function to use during training
+    ema : `ExponentialMovingAverage`
+        Exponential Moving Average to be used during evaluation
+    total_batches : int
+        Expected total batches in training dataloader. Used for displaying progress only
+    padding_token_idx : int
+        Index of the padding token
     """
     total_loss = 0
     step = 0
@@ -159,26 +204,41 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
 
 
 def initial_model_parameters(model, word_embedding):
-    r"""
-    Initial the word embedding layer.
+    """Init model parameters
+
+    Parameters
+    ----------
+    model : `Block`
+        Model to initialize
+
+    word_embedding : `Embedding`
+        Embedding do be used as pretrained word embedding
+
+    Returns
+    -------
+
     """
     model.collect_params().initialize(ctx=CTX)
     model.word_emb[0].weight.set_data(word_embedding)
 
 
 def reset_embedding_grad(model):
-    r"""
-    Reset the grad about word embedding layer.
+    """Reset gradients of word embedding layer, except for UNK token.
+
+    Parameters
+    ----------
+    model : `Block`
+        Model in training
     """
     for ctx in CTX:
         model.word_emb[0].weight.grad(ctx=ctx)[1:] = 0
 
 
 def main():
-    r"""
-    Main function.
+    """Main function
     """
     args = get_args()
+    create_output_dir(args.save_dir)
     pipeline = SQuADDataPipeline(TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT,
                                  DEV_QUES_LIMIT, ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME)
     _, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \

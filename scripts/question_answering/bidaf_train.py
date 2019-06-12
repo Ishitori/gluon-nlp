@@ -34,14 +34,14 @@ try:
     from bidaf_config import get_args
     from bidaf_evaluate import PerformanceEvaluator
     from data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
-    from utils import warm_up_lr
+    from utils import warm_up_lr, create_output_dir
     from ema import ExponentialMovingAverage
     from bidaf_model import BiDAFModel
 except ImportError:
     from .bidaf_config import get_args
     from .bidaf_evaluate import PerformanceEvaluator
     from .data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
-    from .utils import warm_up_lr
+    from .utils import warm_up_lr, create_output_dir
     from .ema import ExponentialMovingAverage
     from .bidaf_model import BiDAFModel
 
@@ -399,6 +399,7 @@ if __name__ == '__main__':
     args = get_args()
     args.batch_size = int(args.batch_size / len(get_context(args)))
     print(args)
+    create_output_dir(args.save_dir)
 
     pipeline = SQuADDataPipeline(args.ctx_max_len, args.q_max_len,
                                  args.ctx_max_len, args.q_max_len,
@@ -422,7 +423,7 @@ if __name__ == '__main__':
                                 last_batch='keep', num_workers=multiprocessing.cpu_count(),
                                 pin_memory=True)
 
-    if args.train:
+    if args.train or not args.evaluate:
         print('Running in training mode')
         run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx,
                      options=args)
