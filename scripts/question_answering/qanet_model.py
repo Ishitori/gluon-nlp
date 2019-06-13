@@ -24,13 +24,11 @@ import math
 import mxnet as mx
 from mxnet import gluon, nd
 from mxnet.initializer import MSRAPrelu, Normal, Uniform, Xavier
-from gluonnlp.model import (DotProductAttentionCell, Highway,
-                            MultiHeadAttentionCell)
+from gluonnlp.model import (DotProductAttentionCell, Highway, MultiHeadAttentionCell)
 
 try:
     from qanet_config import (LAYERS_DROPOUT, EMB_ENCODER_CONV_CHANNELS, NUM_HIGHWAY_LAYERS,
-                              CORPUS_WORDS, CORPUS_CHARACTERS, DIM_WORD_EMBED,
-                              WORD_EMBEDDING_DROPOUT,
+                              DIM_WORD_EMBED, WORD_EMBEDDING_DROPOUT,
                               DIM_CHAR_EMBED, CHAR_EMBEDDING_DROPOUT,
                               MODEL_ENCODER_CONV_KERNEL_SIZE,
                               EMB_ENCODER_CONV_KERNEL_SIZE, EMB_ENCODER_NUM_BLOCK,
@@ -40,8 +38,7 @@ try:
                               p_L, MODEL_ENCODER_NUM_CONV_LAYERS, MODEL_ENCODER_NUM_HEAD)
 except ImportError:
     from .qanet_config import (LAYERS_DROPOUT, EMB_ENCODER_CONV_CHANNELS, NUM_HIGHWAY_LAYERS,
-                               CORPUS_WORDS, CORPUS_CHARACTERS, DIM_WORD_EMBED,
-                               WORD_EMBEDDING_DROPOUT,
+                               DIM_WORD_EMBED, WORD_EMBEDDING_DROPOUT,
                                DIM_CHAR_EMBED, CHAR_EMBEDDING_DROPOUT,
                                MODEL_ENCODER_CONV_KERNEL_SIZE,
                                EMB_ENCODER_CONV_KERNEL_SIZE, EMB_ENCODER_NUM_BLOCK,
@@ -592,12 +589,12 @@ class PositionEncoder(gluon.HybridBlock):
         channels = x.shape[2]
         position = nd.array(range(length))
         num_timescales = channels // 2
-        log_timescale_increment = (
-                math.log(float(max_timescale) / float(min_timescale)) / (num_timescales - 1))
+        log_timescale_increment = (math.log(float(max_timescale) /
+                                            float(min_timescale)) /
+                                   (num_timescales - 1))
         inv_timescales = min_timescale * \
                          nd.exp(nd.array(range(num_timescales)) * -log_timescale_increment)
-        scaled_time = F.expand_dims(
-            position, 1) * F.expand_dims(inv_timescales, 0)
+        scaled_time = F.expand_dims(position, 1) * F.expand_dims(inv_timescales, 0)
         signal = F.concat(F.sin(scaled_time), F.cos(scaled_time), dim=1)
         signal = F.reshape(signal, (1, length, channels))
         return x + signal.as_in_context(x.context)
