@@ -40,7 +40,7 @@ def evaluate(model, dataloader, dataset, original_json_data, ema=None, padding_t
 
     if ema is not None:
         for name, params in model.collect_params().items():
-            params.set_data(ema.get(name))
+            params.set_data(ema.get_param(name))
 
     autograd.set_training(False)
     total_answers = {}

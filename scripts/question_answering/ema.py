@@ -18,6 +18,9 @@
 # under the License.
 
 """Exponential moving average"""
+import mxnet as mx
+
+from mxnet import gluon
 
 
 class ExponentialMovingAverage(object):
@@ -33,43 +36,38 @@ class ExponentialMovingAverage(object):
 
     def __init__(self, decay=0.9999, **kwargs):
         super(ExponentialMovingAverage, self).__init__(**kwargs)
-        self.decay = decay
-        self.shadow = {}
+        self._params = None
+        self._decay = decay
+        self._shadow_params = gluon.ParameterDict()
 
-    def add(self, name, parameters):
-        r"""Update the shadow variable.
-
-        Parameters
-        -----------
-        name : string
-            the name of shadow variable.
-        parameters : NDArray
-            the init value of shadow variable.
-        Returns
-        --------
-        return : None
-        """
-        self.shadow[name] = parameters.copy()
-
-    def __call__(self, name, x):
-        r"""Update the shadow variable.
+    def initialize(self, params):
+        """Initialize EMA. Usually it should be called after 1st forward pass happened as
+        EMA requires shape information to be available.
 
         Parameters
-        -----------
-        name : string
-            the name of shadow variable.
-        x : NDArray
-            the value of shadow variable.
-        Returns
-        --------
-        return : None
+        ----------
+        params : `ParameterDict`
+            Parameters of the network, usually obtained by calling net.collect_params()
         """
-        assert name in self.shadow
-        self.shadow[name] = self.decay * \
-            self.shadow[name] + (1.0 - self.decay) * x
+        self._params = params
 
-    def get(self, name):
-        r"""Return the shadow variable.
+        for param in self._params.values():
+            shadow_param = self._shadow_params.get(param.name, shape=param.shape)
+            shadow_param.initialize(mx.init.Constant(self._param_data_to_cpu(param)), ctx=mx.cpu())
+
+    def update(self):
+        """
+        Updates currently held saved parameters with current state of network.
+        All calculations for this average occur on the cpu context.
+        """
+        for param in self._params.values():
+            polyak_param = self._shadow_params.get(param.name)
+            polyak_param.set_data(
+                (1 - self._decay) * self._param_data_to_cpu(param) +
+                self._decay * polyak_param.data(mx.cpu()))
+
+    def get_param(self, name):
+        """Return the shadow variable.
 
         Parameters
         -----------
@@ -81,4 +79,29 @@ class ExponentialMovingAverage(object):
         return : NDArray
             the value of shadow variable.
         """
-        return self.shadow[name]
+        return self._shadow_params.get(name).data(mx.cpu())
+
+    def get_params(self):
+        """ Provides averaged parameters
+
+        Returns
+        -------
+        gluon.ParameterDict
+            Averaged parameters
+        """
+        return self._shadow_params
+
+    def _param_data_to_cpu(self, param):
+        """Returns a copy (on CPU context) of the data held in some context of given parameter.
+
+        Parameters
+        ----------
+        param: gluon.Parameter
+            Parameter's whose data needs to be copied.
+
+        Returns
+        -------
+        NDArray
+            Copy of data on CPU context.
+        """
+        return param.list_data()[0].copyto(mx.cpu())

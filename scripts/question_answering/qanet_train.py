@@ -4,7 +4,6 @@ This file contains the train code.
 import json
 import multiprocessing
 import os
-import time
 
 from mxnet import autograd, gluon, nd
 from mxnet.gluon.data import DataLoader
@@ -14,13 +13,14 @@ try:
     from data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
     from qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
                               ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
-                              SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
+                              BEST_MODEL_FILE_NAME, BEST_MODEL_EMA_FILE_NAME,
                               LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
                               NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
-                              ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
-                              CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
+                              ACCUM_AVG_TRAIN_CROSS_ENTROPY_PREFIX,
+                              BATCH_TRAIN_CROSS_ENTROPY_PREFIX,
+                              CTX, WEIGHT_DECAY, CLIP_GRADIENT, BETA1,
                               INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
-                              TARGET_MODEL_FILE_NAME, WARM_UP_STEPS, get_args)
+                              WARM_UP_STEPS, get_args)
     from qanet_model import MySoftmaxCrossEntropy, QANet
     from qanet_evaluate import evaluate
     from ema import ExponentialMovingAverage
@@ -29,13 +29,14 @@ except ImportError:
     from .data_pipeline import SQuADDataPipeline, SQuADDataLoaderTransformer
     from .qanet_config import (TRAIN_PARA_LIMIT, TRAIN_QUES_LIMIT, DEV_PARA_LIMIT, DEV_QUES_LIMIT,
                                ANS_LIMIT, CHAR_LIMIT, GLOVE_FILE_NAME, EPOCHS,
-                               SAVE_MODEL_PREFIX_NAME, SAVE_TRAINER_PREFIX_NAME,
+                               BEST_MODEL_FILE_NAME, BEST_MODEL_EMA_FILE_NAME,
                                LAST_GLOBAL_STEP, TRAIN_FLAG, EVALUATE_INTERVAL, BETA2,
                                NEED_LOAD_TRAINED_MODEL, TRAIN_BATCH_SIZE,
-                               ACCUM_AVG_TRAIN_CROSS_ENTROPY, BATCH_TRAIN_CROSS_ENTROPY,
-                               CTX, WEIGHT_DECAY, CLIP_GRADIENT, TARGET_TRAINER_FILE_NAME, BETA1,
+                               ACCUM_AVG_TRAIN_CROSS_ENTROPY_PREFIX,
+                               BATCH_TRAIN_CROSS_ENTROPY_PREFIX,
+                               CTX, WEIGHT_DECAY, CLIP_GRADIENT, BETA1,
                                INIT_LEARNING_RATE, EXPONENTIAL_MOVING_AVERAGE_DECAY, EPSILON,
-                               TARGET_MODEL_FILE_NAME, WARM_UP_STEPS, get_args)
+                               WARM_UP_STEPS, get_args)
     from .qanet_model import MySoftmaxCrossEntropy, QANet
     from .qanet_evaluate import evaluate
     from .ema import ExponentialMovingAverage
@@ -77,26 +78,36 @@ def train(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, t
     options : `Namespace`
         Command arguments
     """
+    max_dev_f1 = -1
+
     for e in tqdm(range(EPOCHS)):
         print('Begin %d/%d epoch...' % (e + 1, EPOCHS))
         train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data,
                         trainer, loss_function, ema, total_batches, padding_token_idx)
 
-        # save model after train one epoch
-        model.save_parameters(os.path.join(options.save_dir, SAVE_MODEL_PREFIX_NAME +
-                                           time.asctime(time.localtime(time.time()))))
-        trainer.save_states(os.path.join(options.save_dir, SAVE_TRAINER_PREFIX_NAME +
-                                         time.asctime(time.localtime(time.time()))))
+        f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json_data, ema,
+                                      padding_token_idx)
+        print('epoch: {}, Dev F1: {}, EM: {}'.format(e + 1, f1_score, em_score))
+        dev_f1.append([global_step, f1_score])
+        dev_em.append([global_step, em_score])
 
-        with open(os.path.join(options.save_dir,
-                               ACCUM_AVG_TRAIN_CROSS_ENTROPY + time.asctime(
-                                   time.localtime(time.time()))), 'w') as f:
-            f.write(json.dumps(accum_avg_train_ce))
+        if f1_score > max_dev_f1:
+            model.save_parameters(os.path.join(options.save_dir, BEST_MODEL_FILE_NAME))
 
-        with open(os.path.join(options.save_dir,
-                               BATCH_TRAIN_CROSS_ENTROPY + time.asctime(
-                                   time.localtime(time.time()))), 'w') as f:
-            f.write(json.dumps(batch_train_ce))
+            ema.get_params().save(os.path.join(options.save_dir, BEST_MODEL_EMA_FILE_NAME))
+
+        if options.save_cross_entropy:
+            ce_template = '{}_epoch_{}.json'
+
+            with open(os.path.join(options.save_dir,
+                                   ce_template.format(ACCUM_AVG_TRAIN_CROSS_ENTROPY_PREFIX, e + 1)),
+                      'w') as f:
+                f.write(json.dumps(accum_avg_train_ce))
+
+            with open(os.path.join(options.save_dir,
+                                   ce_template.format(BATCH_TRAIN_CROSS_ENTROPY_PREFIX, e + 1)),
+                      'w') as f:
+                f.write(json.dumps(batch_train_ce))
 
 
 def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_json_data, trainer,
@@ -132,8 +143,8 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
     for _, context, query, context_char, query_char, begin, end in train_dataloader:
         step += 1
         global_step += 1
-        # add evaluate per EVALUATE_INTERVAL batchs
-        if global_step % EVALUATE_INTERVAL == 0:
+        # add evaluate per EVALUATE_INTERVAL batches
+        if EVALUATE_INTERVAL > 0 and global_step % EVALUATE_INTERVAL == 0:
             print('global_step == %d' % global_step)
             print('evaluating dev dataset...')
             f1_score, em_score = evaluate(model, dev_dataloader, dev_dataset, dev_json_data, ema,
@@ -165,8 +176,7 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
                 loss.backward()
 
         if global_step == 1:
-            for name, param in model.collect_params().items():
-                ema.add(name, param.data(CTX[0]))
+            ema.initialize(model.collect_params())
 
         trainer.set_learning_rate(warm_up_lr(INIT_LEARNING_RATE, global_step, WARM_UP_STEPS))
         trainer.allreduce_grads()
@@ -176,7 +186,7 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
         for name, parameter in model.collect_params().items():
             grad = parameter.grad(context[0].context)
             if name == 'qanet0_embedding0_weight':
-                grad[0:2] += WEIGHT_DECAY * parameter.data(context[0].context)[0:2]
+                grad[0:1] += WEIGHT_DECAY * parameter.data(context[0].context)[0:1]
             else:
                 grad += WEIGHT_DECAY * parameter.data(context[0].context)
             tmp.append(grad)
@@ -185,8 +195,7 @@ def train_one_epoch(model, train_dataloader, dev_dataloader, dev_dataset, dev_js
         reset_embedding_grad(model)
         trainer.update(batch_sizes, ignore_stale_grad=True)
 
-        for name, param in model.collect_params().items():
-            ema(name, param.data(CTX[0]))
+        ema.update()
 
         batch_loss = .0
         for loss in different_ctx_loss:
@@ -248,7 +257,7 @@ def main():
     # initial parameters
     print('Initial parameters...')
     if NEED_LOAD_TRAINED_MODEL:
-        model.load_parameters(TARGET_MODEL_FILE_NAME, ctx=CTX)
+        model.load_parameters(BEST_MODEL_FILE_NAME, ctx=CTX)
     else:
         print('Initial model parameters...')
         initial_model_parameters(model, word_vocab.embedding.idx_to_vec)
@@ -269,9 +278,6 @@ def main():
                 'epsilon': EPSILON
             }
         )
-
-        if NEED_LOAD_TRAINED_MODEL:
-            trainer.load_states(TARGET_TRAINER_FILE_NAME)
 
         train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
                                       batch_size=TRAIN_BATCH_SIZE, shuffle=True, last_batch='keep',

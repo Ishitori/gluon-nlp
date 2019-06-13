@@ -73,7 +73,7 @@ def get_context(options):
     return ctx
 
 
-def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, options):
+def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, ema, options):
     """Main function to do training of the network
 
     Parameters
@@ -81,9 +81,17 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
     net : `Block`
         Network to train
     train_dataloader : `DataLoader`
-        Initialized dataloader
+        Initialized training dataloader
+    dev_dataloader : `DataLoader`
+        Initialized dev dataloader
+    dev_dataset : `SQuADQADataset`
+        Initialized dev dataset
+    dev_json : `dict`
+        Original dev JSON data
     ctx: `Context`
         Training context
+    ema : `ExponentialMovingAverage`
+        Exponential moving average to be used for inference.
     options : `Namespace`
         Training arguments
     """
@@ -95,7 +103,6 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
     trainer = Trainer(net.collect_params(), options.optimizer, hyperparameters, kvstore='device')
     loss_function = SoftmaxCrossEntropyLoss()
-    ema = None
 
     train_start = time()
     avg_loss = mx.nd.zeros((1,), ctx=ctx[0])
@@ -136,10 +143,7 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
                 loss.backward()
 
             if iteration == 1 and options.use_exponential_moving_average:
-                ema = ExponentialMovingAverage(options.exponential_moving_average_weight_decay)
-
-                for name, param in net.collect_params().items():
-                    ema.add(name, param.data(ctx[0]))
+                ema.initialize(net.collect_params())
 
             if options.lr_warmup_steps:
                 trainer.set_learning_rate(
@@ -147,9 +151,8 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
             execute_trainer_step(net, trainer, ctx, options)
 
-            if ema is not None:
-                for name, param in net.collect_params().items():
-                    ema(name, param.data(ctx[0]))
+            if options.use_exponential_moving_average:
+                ema.update()
 
             if options.log_interval > 0 and iteration % options.log_interval == 0:
                 evaluate_options = copy.deepcopy(options)
@@ -189,6 +192,12 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
         # block the call here to get correct Time per epoch
         avg_loss_scalar = avg_loss.asscalar()
+
+        evaluate_options = copy.deepcopy(options)
+        evaluate_options.epochs = e
+        eval_result = run_evaluate(net, dev_dataloader, dev_dataset, dev_json, evaluate_options,
+                                   ema)
+
         epoch_time = time() - e_start
 
         print('\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} '
@@ -196,15 +205,13 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
               .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
                       records_per_epoch_count / epoch_time, epoch_time))
 
-        save_model_parameters(net.collect_params() if ema is None else ema.get_params(), e, options)
-        save_trainer_parameters(trainer, e, options)
+        if eval_result['f1'] > max_dev_f1:
+            max_dev_f1 = eval_result['f1']
+            max_dev_exact = eval_result['exact_match']
+            save_parameters(net.collect_params(), 'bidaf_model.params', options)
+            save_parameters(ema.get_params(), 'bidaf_ema.params', options)
 
         if options.terminate_training_on_reaching_F1_threshold:
-            evaluate_options = copy.deepcopy(options)
-            evaluate_options.epochs = e
-            eval_result = run_evaluate(net, dev_dataloader, dev_dataset, dev_json, evaluate_options,
-                                       ema)
-
             if eval_result['f1'] >= options.terminate_training_on_reaching_F1_threshold:
                 print('Finishing training on {} epoch, because dev F1 score is >= required {}. {}'
                       .format(e, options.terminate_training_on_reaching_F1_threshold, eval_result))
@@ -315,15 +322,15 @@ def execute_trainer_step(net, trainer, ctx, options):
         trainer.step(scailing_coeff)
 
 
-def save_model_parameters(params, epoch, options):
+def save_parameters(params, filename, options):
     """Save parameters of the trained model
 
     Parameters
     ----------
     params : `gluon.ParameterDict`
         Model with trained parameters
-    epoch : `int`
-        Number of epoch
+    filename : `str`
+        Filename of parameters file
     options : `Namespace`
         Saving arguments
 
@@ -335,31 +342,9 @@ def save_model_parameters(params, epoch, options):
     if not os.path.exists(options.save_dir):
         os.mkdir(options.save_dir)
 
-    save_path = os.path.join(options.save_dir, 'epoch{:d}.params'.format(epoch))
+    save_path = os.path.join(options.save_dir, filename)
     params.save(save_path)
     return save_path
-
-
-def save_trainer_parameters(trainer, epoch, options):
-    """Save exponentially averaged parameters of the trained model
-
-    Parameters
-    ----------
-    trainer : `Trainer`
-        Trainer
-    epoch : `int`
-        Number of epoch
-    options : `Namespace`
-        Saving arguments
-    """
-    if trainer is None:
-        return
-
-    if not os.path.exists(options.save_dir):
-        os.mkdir(options.save_dir)
-
-    save_path = os.path.join(options.save_dir, 'trainer_epoch{:d}.params'.format(epoch))
-    trainer.save_states(save_path)
 
 
 def run_evaluate(net, dev_dataloader, dev_dataset, dev_json, options, existing_ema=None):
@@ -369,6 +354,12 @@ def run_evaluate(net, dev_dataloader, dev_dataset, dev_json, options, existing_e
     ----------
     net : `Block`
         Trained existing network
+    dev_dataloader : `DataLoader`
+        Dev dataloader
+    dev_dataset : `SQuADQADataset`
+        Dev dataset
+    dev_json : `dict`
+        Original JSON dictionary of dev dataset
     existing_ema : `ExponentialMovingAverage`
         Averaged parameters of the network
     options : `Namespace`
@@ -381,10 +372,10 @@ def run_evaluate(net, dev_dataloader, dev_dataset, dev_json, options, existing_e
     """
 
     if existing_ema is not None:
-        params_path = save_model_parameters(net.collect_params(), options.epochs, options)
+        params_path = save_parameters(net.collect_params(), 'tmp.params', options)
 
         for name, params in net.collect_params().items():
-            params.set_data(existing_ema.get(name))
+            params.set_data(existing_ema.get_param(name))
 
     evaluator = PerformanceEvaluator(dev_dataloader, dev_dataset, dev_json)
     performance = evaluator.evaluate_performance(net, ctx, options)
@@ -410,6 +401,9 @@ if __name__ == '__main__':
 
     ctx = get_context(args)
 
+    ema = ExponentialMovingAverage(args.exponential_moving_average_weight_decay) \
+        if args.use_exponential_moving_average else None
+
     net = BiDAFModel(word_vocab, char_vocab, args, prefix='bidaf')
     net.initialize(init.Xavier(), ctx=ctx)
     net.hybridize(static_alloc=True)
@@ -425,7 +419,7 @@ if __name__ == '__main__':
 
     if args.train or not args.evaluate:
         print('Running in training mode')
-        run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx,
+        run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, ctx, ema,
                      options=args)
 
     if args.evaluate:

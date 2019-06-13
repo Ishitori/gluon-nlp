@@ -33,15 +33,15 @@ CHAR_LIMIT = 16
 
 GLOVE_FILE_NAME = 'glove.840B.300d'
 
-ACCUM_AVG_TRAIN_CROSS_ENTROPY = 'qanet_accum_avg_train_cross_entropy.json'
-BATCH_TRAIN_CROSS_ENTROPY = 'qanet_batch_train_cross_entropy.json'
+ACCUM_AVG_TRAIN_CROSS_ENTROPY_PREFIX = 'qanet_accum_avg_train_cross_entropy'
+BATCH_TRAIN_CROSS_ENTROPY_PREFIX = 'qanet_batch_train_cross_entropy'
 TRAIN_F1 = 'qanet_train_f1.json'
 TRAIN_EM = 'qanet_train_em.json'
 DEV_CROSS_ENTROPY = 'qanet_dev_cross_entropy.json'
 DEV_F1 = 'qanet_dev_f1.json'
 DEV_EM = 'qanet_dev_em.json'
 
-EVALUATE_INTERVAL = 5000
+EVALUATE_INTERVAL = 0
 
 TRAIN_FLAG = True
 CTX = [mx.gpu(0)]
@@ -51,11 +51,9 @@ TRAIN_BATCH_SIZE = 32
 EVAL_BATCH_SIZE = 16
 
 # model save & load
-SAVE_MODEL_PREFIX_NAME = 'model_'
-SAVE_TRAINER_PREFIX_NAME = 'trainer_'
+BEST_MODEL_FILE_NAME = 'qanet_model.params'
+BEST_MODEL_EMA_FILE_NAME = 'qanet_ema.params'
 NEED_LOAD_TRAINED_MODEL = False
-TARGET_MODEL_FILE_NAME = 'model_Wed Jul 25 18:12:54 2018'
-TARGET_TRAINER_FILE_NAME = ''
 LAST_GLOBAL_STEP = 0
 
 # dropout
@@ -117,6 +115,8 @@ def get_args():
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--save_dir', type=str, default='qanet_output',
                         help='directory path to save the final model and training log')
+    parser.add_argument('--save_cross_entropy', default=False, action='store_true',
+                        help='Store cross entropy results after each epoch')
 
     options = parser.parse_args()
     return options

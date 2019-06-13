@@ -60,7 +60,7 @@ def get_args():
     parser.add_argument('--clip', type=float, default=0, help='gradient clipping')
     parser.add_argument('--weight_decay', type=float, default=0,
                         help='Weight decay for parameter updates')
-    parser.add_argument('--log_interval', type=int, default=5000, metavar='N',
+    parser.add_argument('--log_interval', type=int, default=0, metavar='N',
                         help='Report interval applied to last epoch only')
     parser.add_argument('--early_stop', type=int, default=9,
                         help='Apply early stopping for the last epoch. Stop after # of consequent '
