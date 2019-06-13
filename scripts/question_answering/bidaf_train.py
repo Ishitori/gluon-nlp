@@ -201,10 +201,11 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
         epoch_time = time() - e_start
 
         print('\tEPOCH {:2}: train loss {:6.4f} | batch {:4} | lr {:5.3f} '
-              '| throughtput {:5.3f} of samples/sec | Time per epoch {:5.2f} seconds'
-              .format(e, avg_loss_scalar, options.batch_size, trainer.learning_rate,
-                      records_per_epoch_count / epoch_time, epoch_time))
-
+              '| throughtput {:5.3f} of samples/sec | Time per epoch {:5.2f} seconds '
+              '| Evaluation result  {}'.format(e, avg_loss_scalar, options.batch_size,
+                                               trainer.learning_rate,
+                                               records_per_epoch_count / epoch_time,
+                                               epoch_time, eval_result))
         if eval_result['f1'] > max_dev_f1:
             max_dev_f1 = eval_result['f1']
             max_dev_exact = eval_result['exact_match']
