@@ -407,7 +407,7 @@ if __name__ == '__main__':
 
     net = BiDAFModel(word_vocab, char_vocab, args, prefix='bidaf')
     net.initialize(init.Xavier(), ctx=ctx)
-    net.hybridize(static_alloc=True)
+    net.hybridize(static_alloc=True, static_shape=True)
 
     train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
                                   batch_size=len(ctx) * args.batch_size, shuffle=True,

@@ -309,19 +309,33 @@ class SQuADDataPipeline(object):
         embedding = nlp.embedding.create('glove', source=emb_file_name)
 
         if is_cased_embedding:
-            word_counts = itertools.chain(*[[(item[0], item[1]),
-                                             (item[0].lower(), item[1]),
-                                             (item[0].capitalize(), item[1]),
-                                             (item[0].upper(), item[1])] for item in word_counts])
+            updated_counter = {}
+            for item in word_counts:
+                if item[0] in embedding.token_to_idx:
+                    updated_counter[item[0]] = item[1]
+                else:
+                    for cased_item in [(item[0].lower(), item[1]),
+                                       (item[0].capitalize(), item[1]),
+                                       (item[0].upper(), item[1])]:
+                        if cased_item[0] in embedding.token_to_idx:
+                            updated_counter[cased_item[0]] = cased_item[1]
+                            break
+
+                    if not shrink_word_vocab:
+                        updated_counter[item[0]] = item[1]
+
+            word_vocab = Vocab(updated_counter, bos_token=None, eos_token=None)
+            char_vocab = Vocab({item[0]: item[1] for item in char_counts},
+                               bos_token=None, eos_token=None)
         else:
             word_counts = [(item[0].lower(), item[1]) for item in word_counts]
+            word_vocab = Vocab({item[0]: item[1] for item in word_counts if
+                                not shrink_word_vocab or item[0] in embedding.token_to_idx},
+                               bos_token=None, eos_token=None)
+            char_vocab = Vocab({item[0].lower(): item[1] for item in char_counts},
+                               bos_token=None, eos_token=None)
 
-        word_vocab = Vocab({item[0]: item[1] for item in word_counts if
-                            not shrink_word_vocab or item[0] in embedding.token_to_idx},
-                           bos_token=None, eos_token=None)
         word_vocab.set_embedding(embedding)
-        char_vocab = Vocab({item[0]: item[1] for item in char_counts},
-                           bos_token=None, eos_token=None)
 
         return word_vocab, char_vocab
 
@@ -765,6 +779,24 @@ class SQuADDataFeaturizer(object):
 
         return result
 
+    def _get_chars_emb(self, chars):
+        """Get embedding for the characters
+
+        Parameters
+        ----------
+        chars : list[str]
+            Words to embed
+
+        Returns
+        -------
+        ret : np.array
+            Array of embeddings for words
+        """
+        if not self._is_cased_embedding:
+            return self._char_vocab[[char.lower() for char in chars]]
+        else:
+            return self._char_vocab[chars]
+
     def build_features(self, example):
         """Generate features for a given example
 
@@ -805,11 +837,12 @@ class SQuADDataFeaturizer(object):
 
         for i in range(0, context_len):
             char_len = min(len(example['context_chars'][i]), self._char_limit)
-            ctx_chars_idxs[i, :char_len] = self._char_vocab[example['context_chars'][i][:char_len]]
+            ctx_chars_idxs[i, :char_len] = self._get_chars_emb(
+                example['context_chars'][i][:char_len])
 
         for i in range(0, ques_len):
             char_len = min(len(example['ques_chars'][i]), self._char_limit)
-            ques_char_idxs[i, :char_len] = self._char_vocab[example['ques_tokens'][i][:char_len]]
+            ques_char_idxs[i, :char_len] = self._get_chars_emb(example['ques_tokens'][i][:char_len])
 
         start, end = example['y1s'][-1], example['y2s'][-1]
 

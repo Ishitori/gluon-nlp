@@ -63,7 +63,7 @@ class PerformanceEvaluator:
                 answer_mask_matrix += nd.eye(N=options.ctx_max_len, M=options.ctx_max_len,
                                              k=idx, ctx=cpu(0))
 
-        for idxs, context, query, context_char, query_char, begin, end in tqdm(
+        for idxs, context, query, context_char, query_char, _, _ in tqdm(
                 self._dev_dataloader):
 
             # This is required for multigpu setting. When number of items in the batch is less

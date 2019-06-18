@@ -369,6 +369,10 @@ class BiDAFModel(HybridBlock):
         self.ctx_embedding.init_embeddings('null' if not self._options.train_unk_token else 'write')
 
     def hybrid_forward(self, F, qw, cw, qc, cc):
+        # Both masks can be None
+        q_mask = qw != self._padding_token_idx
+        ctx_mask = cw != self._padding_token_idx
+
         # pylint: disable=arguments-differ,missing-docstring
         ctx_embedding_output = self.ctx_embedding(cw, cc)
         q_embedding_output = self.ctx_embedding(qw, qc)
@@ -376,10 +380,6 @@ class BiDAFModel(HybridBlock):
         # attention layer expect batch_size x seq_length x channels
         ctx_embedding_output = F.transpose(ctx_embedding_output, axes=(1, 0, 2))
         q_embedding_output = F.transpose(q_embedding_output, axes=(1, 0, 2))
-
-        # Both masks can be None
-        q_mask = qw != self._padding_token_idx
-        ctx_mask = cw != self._padding_token_idx
 
         passage_question_similarity = self.matrix_attention(ctx_embedding_output,
                                                             q_embedding_output)
