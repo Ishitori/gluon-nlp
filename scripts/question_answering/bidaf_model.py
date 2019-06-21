@@ -23,9 +23,9 @@ from mxnet import gluon
 from mxnet import initializer
 from mxnet.gluon import HybridBlock
 from mxnet.gluon import nn
-from mxnet.gluon.rnn import LSTM
+from mxnet.initializer import MSRAPrelu, Xavier
 
-from gluonnlp.model import ConvolutionalEncoder, Highway
+from gluonnlp.model import ConvolutionalEncoder, Highway, BiLMEncoder
 
 try:
     from similarity_function import DotProductSimilarity, LinearSimilarity
@@ -194,10 +194,12 @@ class BiDAFEmbedding(HybridBlock):
                                                 output_dim=embedding_size)
 
             self._highway_network = Highway(2 * embedding_size, num_layers=highway_nlayers)
-            self._contextual_embedding = LSTM(hidden_size=embedding_size,
-                                              num_layers=contextual_embedding_nlayers,
-                                              bidirectional=True, input_size=2 * embedding_size,
-                                              dropout=dropout)
+            self._contextual_embedding = BiLMEncoder(mode='lstm',
+                                                     num_layers=contextual_embedding_nlayers,
+                                                     input_size=2 * embedding_size,
+                                                     hidden_size=embedding_size,
+                                                     dropout=dropout,
+                                                     skip_connection=False)
 
     def init_embeddings(self, grad_req='null'):
         """Initialize words embeddings with provided embedding values
@@ -210,7 +212,7 @@ class BiDAFEmbedding(HybridBlock):
         self._word_embedding.weight.set_data(self._word_vocab.embedding.idx_to_vec)
         self._word_embedding.collect_params().setattr('grad_req', grad_req)
 
-    def hybrid_forward(self, F, w, c):
+    def hybrid_forward(self, F, w, c, ctx_embedding_state, word_mask):
         # pylint: disable=arguments-differ,missing-docstring
         word_embedded = self._word_embedding(w)
         char_level_data = self._char_dense_embedding(c)
@@ -226,6 +228,8 @@ class BiDAFEmbedding(HybridBlock):
 
         # Transpose to TNC, to join with character embedding
         word_embedded = F.transpose(word_embedded, axes=(1, 0, 2))
+
+        # batch_size x seq_len x embedding
         highway_input = F.concat(char_embedded, word_embedded, dim=2)
 
         def highway(token_of_all_batches, _):
@@ -234,8 +238,8 @@ class BiDAFEmbedding(HybridBlock):
         # Pass through highway, shape remains unchanged
         highway_output, _ = F.contrib.foreach(highway, highway_input, [])
 
-        # Transpose to TNC - default for LSTM
-        ce_output = self._contextual_embedding(highway_output)
+        ce_output, _ = self._contextual_embedding(highway_output, ctx_embedding_state, word_mask)
+        ce_output = ce_output.slice_axis(axis=0, begin=-1, end=None).squeeze(axis=0)
         return ce_output
 
 
@@ -270,7 +274,7 @@ class BiDAFOutputLayer(HybridBlock):
         Shared Parameters for this `Block`.
     """
 
-    def __init__(self, span_start_input_dim=100, nlayers=1, biflag=True,
+    def __init__(self, span_start_input_dim=100, nlayers=1,
                  dropout=0.2, prefix=None, params=None):
         super(BiDAFOutputLayer, self).__init__(prefix=prefix, params=params)
 
@@ -280,15 +284,18 @@ class BiDAFOutputLayer(HybridBlock):
                                                   flatten=False)
             self._start_index_model = nn.Dense(units=1, in_units=2 * span_start_input_dim,
                                                flatten=False)
-            self._end_index_lstm = LSTM(hidden_size=span_start_input_dim,
-                                        num_layers=nlayers, dropout=dropout, bidirectional=biflag,
-                                        input_size=2 * span_start_input_dim)
+            self._end_index_lstm = BiLMEncoder(mode='lstm',
+                                               num_layers=nlayers,
+                                               input_size=2 * span_start_input_dim,
+                                               hidden_size=span_start_input_dim,
+                                               dropout=dropout,
+                                               skip_connection=False)
             self._end_index_combined = nn.Dense(units=1, in_units=8 * span_start_input_dim,
                                                 flatten=False)
             self._end_index_model = nn.Dense(units=1, in_units=2 * span_start_input_dim,
                                              flatten=False)
 
-    def hybrid_forward(self, F, x, m, mask):
+    def hybrid_forward(self, F, x, m, end_index_states, mask):
         # pylint: disable=arguments-differ,missing-docstring
         # setting batch size as the first dimension
         x = F.transpose(x, axes=(1, 0, 2))
@@ -297,7 +304,8 @@ class BiDAFOutputLayer(HybridBlock):
                                    self._start_index_model(self._dropout(
                                        F.transpose(m, axes=(1, 0, 2))))
 
-        m2 = self._end_index_lstm(m)
+        m2, _ = self._end_index_lstm(m, end_index_states, mask)
+        m2 = m2.slice_axis(axis=0, begin=-1, end=None).squeeze(axis=0)
         end_index_dense_output = self._end_index_combined(self._dropout(x)) + \
                                  self._end_index_model(self._dropout(F.transpose(m2,
                                                                                  axes=(1, 0, 2))))
@@ -354,10 +362,12 @@ class BiDAFModel(HybridBlock):
             self.attention_layer = BidirectionalAttentionFlow(options.ctx_max_len,
                                                               options.q_max_len)
 
-            self.modeling_layer = LSTM(hidden_size=options.embedding_size,
-                                       num_layers=options.modeling_num_layers,
-                                       dropout=0.0, bidirectional=True,
-                                       input_size=8 * options.embedding_size)
+            self.modeling_layer = BiLMEncoder(mode='lstm',
+                                              num_layers=1,
+                                              input_size=8 * options.embedding_size,
+                                              hidden_size=options.embedding_size,
+                                              dropout=0.0,
+                                              skip_connection=False)
 
             self.output_layer = BiDAFOutputLayer(span_start_input_dim=options.embedding_size,
                                                  nlayers=options.output_num_layers,
@@ -368,14 +378,15 @@ class BiDAFModel(HybridBlock):
         super(BiDAFModel, self).initialize(init, ctx, verbose, force_reinit)
         self.ctx_embedding.init_embeddings('null' if not self._options.train_unk_token else 'write')
 
-    def hybrid_forward(self, F, qw, cw, qc, cc):
+    def hybrid_forward(self, F, qw, cw, qc, cc,
+                       ctx_embedding_state, modeling_layer_state, end_index_state):
         # Both masks can be None
         q_mask = qw != self._padding_token_idx
         ctx_mask = cw != self._padding_token_idx
 
         # pylint: disable=arguments-differ,missing-docstring
-        ctx_embedding_output = self.ctx_embedding(cw, cc)
-        q_embedding_output = self.ctx_embedding(qw, qc)
+        ctx_embedding_output = self.ctx_embedding(cw, cc, ctx_embedding_state, ctx_mask)
+        q_embedding_output = self.ctx_embedding(qw, qc, ctx_embedding_state, q_mask)
 
         # attention layer expect batch_size x seq_length x channels
         ctx_embedding_output = F.transpose(ctx_embedding_output, axes=(1, 0, 2))
@@ -398,9 +409,16 @@ class BiDAFModel(HybridBlock):
         attention_layer_output = F.transpose(attention_layer_output, axes=(1, 0, 2))
 
         # modeling layer expects seq_length x batch_size x channels
-        modeling_layer_output = self.modeling_layer(attention_layer_output)
+        modeling_layer_output, _ = self.modeling_layer(attention_layer_output,
+                                                       modeling_layer_state,
+                                                       ctx_mask)
 
-        output = self.output_layer(attention_layer_output, modeling_layer_output, ctx_mask)
+        ml_last_layer = modeling_layer_output.slice_axis(axis=0, begin=-1, end=None).squeeze(axis=0)
+
+        output = self.output_layer(attention_layer_output,
+                                   ml_last_layer,
+                                   end_index_state,
+                                   ctx_mask)
 
         return output
 

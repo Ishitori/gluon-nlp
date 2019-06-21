@@ -91,7 +91,8 @@ class SQuADDataPipeline(object):
         self._word_vocab_file_name = 'word_vocab.bin'
         self._char_vocab_file_name = 'char_vocab.bin'
 
-    def get_processed_data(self, use_spacy=True, shrink_word_vocab=True, squad_data_root=None):
+    def get_processed_data(self, use_spacy=True, shrink_word_vocab=True, squad_data_root=None,
+                           filter_train_examples=True):
         """Main method to start data processing
 
         Parameters
@@ -103,6 +104,8 @@ class SQuADDataPipeline(object):
             word_vocab. Otherwise tokens with no embedding also stay
         squad_data_root : str, default None
             Data path to store downloaded original SQuAD data
+        filter_train_examples : bool, default True
+            Filter training data based on commonsense heuristics
         Returns
         -------
         train_json_data : dict
@@ -137,10 +140,11 @@ class SQuADDataPipeline(object):
                                                                    shrink_word_vocab,
                                                                    pool)
 
-        filter_provider = SQuADDataFilter(self._train_para_limit,
-                                          self._train_ques_limit,
-                                          self._ans_limit)
-        train_examples = list(filter(filter_provider.filter, train_examples))
+        if filter_train_examples:
+            filter_provider = SQuADDataFilter(self._train_para_limit,
+                                              self._train_ques_limit,
+                                              self._ans_limit)
+            train_examples = list(filter(filter_provider.filter, train_examples))
 
         train_featurizer = SQuADDataFeaturizer(word_vocab,
                                                char_vocab,
@@ -336,6 +340,20 @@ class SQuADDataPipeline(object):
                                bos_token=None, eos_token=None)
 
         word_vocab.set_embedding(embedding)
+
+        # count = 0
+        # words_no_embedding = []
+        # for item in word_counts:
+        #     if (word_vocab.embedding[item[0].lower()].sum() != 0).asscalar():
+        #         count += 1
+        #     else:
+        #         words_no_embedding.append(item[0].lower())
+        #
+        # with open("no_embedding_words.txt", "w") as f:
+        #     for word in words_no_embedding:
+        #         f.write(word + "\n")
+        #
+        # print("{}/{} words have embeddings".format(count, len(word_counts)))
 
         return word_vocab, char_vocab
 

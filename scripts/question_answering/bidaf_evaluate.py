@@ -18,6 +18,7 @@
 # under the License.
 
 """Performance evaluator - a proxy class used for plugging in official validation script"""
+import mxnet as mx
 from mxnet import nd, gluon, cpu
 from tqdm import tqdm
 
@@ -90,7 +91,20 @@ class PerformanceEvaluator:
 
             for ri, qw, cw, qc, cc in zip(record_index, q_words, ctx_words,
                                           q_chars, ctx_chars):
-                begin, end = net(qw, cw, qc, cc)
+                ctx_embedding_state = net.ctx_embedding._contextual_embedding.begin_state(
+                    batch_size=ri.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                modeling_layer_state = net.modeling_layer.begin_state(
+                    batch_size=ri.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                end_index_states = net.output_layer._end_index_lstm.begin_state(
+                    batch_size=ri.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                begin, end = net(qw, cw, qc, cc,
+                                 ctx_embedding_state,
+                                 modeling_layer_state,
+                                 end_index_states)
+
                 outs.append((ri.as_in_context(cpu(0)),
                              begin.as_in_context(cpu(0)),
                              end.as_in_context(cpu(0))))

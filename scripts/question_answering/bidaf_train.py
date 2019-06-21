@@ -135,12 +135,27 @@ def run_training(net, train_dataloader, dev_dataloader, dev_dataset, dev_json, c
 
             for qw, cw, qc, cc, s, ee in zip(q_words, ctx_words, q_chars, ctx_chars, start, end):
                 with autograd.record():
-                    begin_hat, end_hat = net(qw, cw, qc, cc)
+                    ctx_embedding_state = net.ctx_embedding._contextual_embedding.begin_state(
+                        batch_size=r_idx.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                    modeling_layer_state = net.modeling_layer.begin_state(
+                        batch_size=r_idx.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                    end_index_states = net.output_layer._end_index_lstm.begin_state(
+                        batch_size=r_idx.shape[0], func=mx.ndarray.zeros, ctx=qw.context)
+
+                    begin_hat, end_hat = net(qw, cw, qc, cc,
+                                             ctx_embedding_state,
+                                             modeling_layer_state,
+                                             end_index_states)
                     loss = loss_function(begin_hat, s) + loss_function(end_hat, ee)
                     losses.append(loss)
+                    # mx.nd.waitall()
 
             for loss in losses:
                 loss.backward()
+
+            # mx.nd.waitall()
 
             if iteration == 1 and options.use_exponential_moving_average:
                 ema.initialize(net.collect_params())
@@ -398,7 +413,8 @@ if __name__ == '__main__':
                                  args.answer_max_len, args.word_max_len,
                                  args.embedding_file_name)
     train_json, dev_json, train_dataset, dev_dataset, word_vocab, char_vocab = \
-        pipeline.get_processed_data(use_spacy=False, shrink_word_vocab=True)
+        pipeline.get_processed_data(use_spacy=False, shrink_word_vocab=True,
+                                    filter_train_examples=False)
 
     ctx = get_context(args)
 
@@ -407,7 +423,7 @@ if __name__ == '__main__':
 
     net = BiDAFModel(word_vocab, char_vocab, args, prefix='bidaf')
     net.initialize(init.Xavier(), ctx=ctx)
-    net.hybridize(static_alloc=True, static_shape=True)
+    net.hybridize(static_alloc=True)
 
     train_dataloader = DataLoader(train_dataset.transform(SQuADDataLoaderTransformer()),
                                   batch_size=len(ctx) * args.batch_size, shuffle=True,

@@ -61,10 +61,10 @@ class ExponentialMovingAverage(object):
         All calculations for this average occur on the cpu context.
         """
         for param in self._params.values():
-            polyak_param = self._shadow_params.get(param.name)
-            polyak_param.set_data(
+            shadow_param = self._shadow_params.get(param.name)
+            shadow_param.set_data(
                 (1 - self._decay) * self._param_data_to_cpu(param) +
-                self._decay * polyak_param.data(mx.cpu()))
+                self._decay * shadow_param.data(mx.cpu()))
 
     def get_param(self, name):
         """Return the shadow variable.

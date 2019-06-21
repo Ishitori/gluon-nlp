@@ -80,7 +80,7 @@ def get_args():
                         help='Coma-separated ids of the gpu to use. Empty means to use cpu.')
     parser.add_argument('--train_unk_token', default=False, action='store_true',
                         help='Should train unknown token of embedding')
-    parser.add_argument('--filter_long_context', default=True, action='store_false',
+    parser.add_argument('--filter_train_examples', default=True, action='store_false',
                         help='Filter contexts if the answer is after ctx_max_len')
     parser.add_argument('--save_prediction_path', type=str, default='',
                         help='Path to save predictions')
